@@ -13,7 +13,6 @@ Timings (H200, 232K variants, probe_v7):
   Load 3s | GPU similarity 10s | Neighbors 3s | UMAP 40s | Write 70s | Total ~2min
 """
 
-import argparse
 import json
 import shutil
 import subprocess
@@ -31,27 +30,22 @@ from sklearn.decomposition import PCA
 from tqdm import tqdm
 from umap import UMAP
 
-from display import auto_group, display_name
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 
-# ── Inlined constants (from src.datasets.clinvar.main) ────────────────────
-_AA = "ACDEFGHIKLMNPQRSTVWY"
-AA_SWAP_CLASSES = tuple(f"{a}>{b}" for a in _AA for b in _AA if a != b)
-
-CONSEQUENCE_CLASSES = (
-    "missense_variant", "intron_variant", "synonymous_variant", "nonsense",
-    "frameshift_variant", "non-coding_transcript_variant", "splice_donor_variant",
-    "splice_acceptor_variant", "5_prime_UTR_variant", "3_prime_UTR_variant",
-    "splice_region_variant", "start_lost", "inframe_deletion", "inframe_insertion",
-    "inframe_indel", "stop_lost", "genic_downstream_transcript_variant",
-    "genic_upstream_transcript_variant", "no_sequence_alteration",
-    "initiator_codon_variant",
-)
+from src.datasets import clinvar
+from src.datasets.clinvar.main import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
 
 # ── Constants ────────────────────────────────────────────────────────────
+ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
+LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
+VUS = ARTIFACTS / "clinvar_evo2_vus"
+PROBE = "probe_v8"
 K_NEIGHBORS = 10
 LABEL_TO_IDX = {"benign": 0, "pathogenic": 1, "VUS": 2}
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
+VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations"
 VEP_COLS = (
     "variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
     "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot",
@@ -59,6 +53,93 @@ VEP_COLS = (
     "vep_gnomade", "vep_gnomade_afr", "vep_gnomade_amr", "vep_gnomade_asj",
     "vep_gnomade_eas", "vep_gnomade_fin", "vep_gnomade_nfe", "vep_gnomade_sas",
 )
+
+# ── Display names ────────────────────────────────────────────────────────
+_DISPLAY_OVERRIDES: dict[str, str] = {
+    "cadd_c": "CADD", "revel_c": "REVEL", "alphamissense_c": "AlphaMissense",
+    "sift_c": "SIFT", "polyphen_c": "PolyPhen-2", "eve_c": "EVE",
+    "spliceai_max_c": "SpliceAI", "gnomad_af_c": "gnomAD AF",
+    "spliceai_ag_c": "SpliceAI AG", "spliceai_al_c": "SpliceAI AL",
+    "spliceai_dg_c": "SpliceAI DG", "spliceai_dl_c": "SpliceAI DL",
+    "mpc_c": "MPC", "mvp_c": "MVP", "mcap_c": "M-CAP",
+    "metalr_c": "MetaLR", "vest4_c": "VEST4", "primateai_c": "PrimateAI",
+    "mutpred_c": "MutPred", "clinpred_c": "ClinPred", "deogen2_c": "DEOGEN2",
+    "bayesdel_c": "BayesDel", "remm_c": "ReMM", "regulomedb_c": "RegulomeDB",
+    "phylop_c": "PhyloP", "phastcons_c": "PhastCons", "gerp_c": "GERP",
+    "blosum62_c": "BLOSUM62", "grantham_c": "Grantham",
+    "hydrophobicity_c": "Hydrophobicity", "volume_c": "Volume", "mw_c": "Mol. Weight",
+    "loeuf_c": "LOEUF",
+    "gtex_max_tpm_c": "GTEx Max TPM", "gtex_n_tissues_c": "GTEx Tissues",
+    "gtex_brain_max_c": "GTEx Brain Max",
+    "in_domain": "In Domain", "is_exonic": "Exonic",
+    "splice_disrupting": "Splice Disrupting", "charge_altering": "Charge Altering",
+    "pathogenic": "Pathogenicity", "consequence": "Consequence", "impact": "Impact",
+    "aa_swap": "AA Substitution",
+}
+
+_ACRONYMS = {"chipseq", "atacseq", "chromhmm", "fstack", "ptm", "elm"}
+_GROUP_PREFIXES = (
+    "interpro_", "pfam_", "amino_acid_", "elm_", "gtex_",
+    "chipseq_", "atacseq_", "chromhmm_", "fstack_", "ptm_",
+)
+
+# ── Head grouping (reverse map: group → prefixes) ───────────────────────
+_PREFIX_TO_GROUP: dict[str, str] = {}
+for _group, _prefixes in {
+    "Conservation": ("phylop", "phastcons", "gerp"),
+    "Protein features": ("secondary", "disorder", "plddt", "rsa", "sasa", "phi", "psi", "ppi", "residue"),
+    "Structure": ("in", "is", "has"),
+    "InterPro domains": ("interpro",),
+    "Pfam domains": ("pfam",),
+    "ELM motifs": ("elm",),
+    "ChIP-seq": ("chipseq",),
+    "ATAC-seq": ("atacseq",),
+    "Chromatin": ("chromhmm", "fstack"),
+    "Regulatory": ("ccre", "dna"),
+    "Amino acid": ("amino",),
+    "Sequence context": ("codon", "trinuc", "gc", "cpg", "syn"),
+    "Substitution": ("aa", "blosum62", "grantham", "hydrophobicity", "volume", "mw"),
+    "Modifications": ("ptm",),
+    "Expression": ("gtex",),
+    "Region": ("region", "exon", "n", "trf", "segdup", "recomb"),
+    "Constraint": ("loeuf",),
+    "Clinical": (
+        "cadd", "revel", "alphamissense", "sift", "polyphen", "eve", "bayesdel",
+        "clinpred", "deogen2", "mcap", "metalr", "mpc", "mutpred", "mvp",
+        "primateai", "vest4", "remm", "regulomedb",
+    ),
+    "Splice": ("spliceai",),
+    "Variant effects": ("splice", "charge", "consequence", "impact", "csq"),
+    "Population": ("gnomad",),
+    "Pathogenicity": ("pathogenic",),
+}.items():
+    _PREFIX_TO_GROUP.update({p: _group for p in _prefixes})
+
+
+def display_name(h: str) -> str:
+    """Human-readable head name, with group prefix stripped."""
+    if h in _DISPLAY_OVERRIDES:
+        return _DISPLAY_OVERRIDES[h]
+    base = h.removesuffix("_c")
+    for prefix in _GROUP_PREFIXES:
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    base = base.replace("_", " ")
+    if h.split("_")[0] in _ACRONYMS:
+        return base.upper()
+    if base.startswith("PF"):
+        return base
+    return base.title()
+
+
+def auto_group(heads: set[str]) -> dict[str, list[str]]:
+    """Group heads by first-token prefix lookup."""
+    g: dict[str, list[str]] = {}
+    for h in sorted(heads):
+        g.setdefault(_PREFIX_TO_GROUP.get(h.split("_")[0], "Other"), []).append(h)
+    return g
+
 
 def sanitize_vid(v: str) -> str:
     """Make a variant ID safe for use as a filename.
@@ -89,20 +170,6 @@ def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
 # ── Main build ───────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build variant viewer static site from probe scores.")
-    parser.add_argument("--labeled", required=True, type=Path, help="Labeled activations dir")
-    parser.add_argument("--vus", type=Path, help="VUS activations dir")
-    parser.add_argument("--probe", default="probe_v8", help="Probe name")
-    parser.add_argument("--vep", type=Path, help="VEP annotation parquets dir")
-    parser.add_argument("--metadata", type=Path, help="Metadata feather (if not baked into scores)")
-    parser.add_argument("--annotations", type=Path, help="Annotations feather with gt_ columns")
-    parser.add_argument("--output", type=Path, default=Path("build/"))
-    parser.add_argument("--no-sync", action="store_true")
-    args = parser.parse_args()
-
-    labeled: Path = args.labeled
-    probe: str = args.probe
-
     t0 = time.time()
 
     def _t(msg: str) -> None:
@@ -111,78 +178,55 @@ def main() -> None:
     # ── Load ─────────────────────────────────────────────────────────────
     _t("Loading...")
 
-    scores_l = pl.read_ipc(str(labeled / probe / "scores.feather"))
+    scores_l = pl.read_ipc(str(LABELED / PROBE / "scores.feather"))
+    scores_v = pl.read_ipc(str(VUS / PROBE / "scores.feather"))
+    meta_l = clinvar.metadata("deconfounded-full").select(
+        "variant_id", "label", "consequence", "gene_name",
+        "clinical_significance", "stars", "disease_name",
+        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id")
+    meta_v = clinvar.metadata("vus").select(
+        "variant_id", "consequence", "gene_name",
+        "clinical_significance", "disease_name",
+        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id")
 
-    # If scores already contain metadata columns, no separate load needed.
-    # Otherwise join from --metadata feather.
-    META_COLS = (
-        "variant_id", "gene_name", "label", "consequence", "clinical_significance",
-        "stars", "disease_name", "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id",
-    )
-    missing_meta = [c for c in META_COLS if c not in scores_l.columns]
-    if missing_meta and args.metadata:
-        meta = pl.read_ipc(str(args.metadata))
-        available = [c for c in META_COLS if c in meta.columns]
-        scores_l = scores_l.join(meta.select(available), on="variant_id", how="left")
-
-    # VUS scores (optional)
-    if args.vus:
-        scores_v = pl.read_ipc(str(args.vus / probe / "scores.feather"))
-        missing_meta_v = [c for c in META_COLS if c not in scores_v.columns]
-        if missing_meta_v and args.metadata:
-            meta_v = pl.read_ipc(str(args.metadata))
-            available_v = [c for c in META_COLS if c in meta_v.columns]
-            scores_v = scores_v.join(meta_v.select(available_v), on="variant_id", how="left")
-
-        df = pl.concat([
-            scores_l.with_columns(
-                pl.col("stars").cast(pl.Int32) if "stars" in scores_l.columns else pl.lit(0).cast(pl.Int32).alias("stars"),
-            ),
-            scores_v.with_columns(
-                pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars"),
-            ),
-        ], how="diagonal")
-    else:
-        df = scores_l.with_columns(
-            pl.col("stars").cast(pl.Int32) if "stars" in scores_l.columns else pl.lit(0).cast(pl.Int32).alias("stars"),
-        )
+    df = pl.concat([
+        scores_l.join(meta_l, on="variant_id", how="left").with_columns(pl.col("stars").cast(pl.Int32)),
+        scores_v.join(meta_v, on="variant_id", how="left").with_columns(
+            pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars")),
+    ], how="diagonal")
 
     df = df.with_columns(
         pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
         pl.col("pred_aa_swap").replace_strict(dict(enumerate(AA_SWAP_CLASSES)), default=None).alias("substitution"),
     )
 
-    # Ground-truth annotations (gt_ columns) from --annotations or from scores
-    if args.annotations:
-        gt = pl.read_ipc(str(args.annotations))
-        df = df.join(
-            gt.rename({c: f"gt_{c}" for c in gt.columns if c != "variant_id"}),
-            on="variant_id", how="left",
-        )
+    gt = clinvar.annotations("deconfounded-full")
+    df = df.join(
+        gt.rename({c: f"gt_{c}" for c in gt.columns if c != "variant_id"}),
+        on="variant_id", how="left",
+    )
 
     # VEP annotations (HGVS, gnomAD frequencies, domains, etc.)
-    vep_dir = args.vep
-    if vep_dir and vep_dir.exists():
-        _t("Loading VEP annotations...")
-        vep_string_cols = {"variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
-                            "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot", "vep_domains"}
-        vep_dfs = []
-        for chrom_file in sorted(vep_dir.glob("variant_annotations_chr*.parquet")):
-            schema = pl.read_parquet_schema(chrom_file)
-            available = [c for c in VEP_COLS if c in schema]
-            chunk = pl.read_parquet(chrom_file, columns=available)
-            # Normalize mixed String/Float columns across chromosomes (single pass)
-            float_casts = [c for c in chunk.columns if c not in vep_string_cols and chunk[c].dtype in (pl.Utf8, pl.String)]
-            if float_casts:
-                chunk = chunk.with_columns(*(pl.col(c).cast(pl.Float64, strict=False) for c in float_casts))
-            vep_dfs.append(chunk)
-        vep_all = pl.concat(vep_dfs, how="diagonal")
-        df = df.join(vep_all, on="variant_id", how="left")
+    _t("Loading VEP annotations...")
+    vep_string_cols = {"variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
+                        "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot", "vep_domains"}
+    vep_dfs = []
+    for chrom_file in sorted(VARIANT_ANN_DIR.glob("variant_annotations_chr*.parquet")):
+        schema = pl.read_parquet_schema(chrom_file)
+        available = [c for c in VEP_COLS if c in schema]
+        chunk = pl.read_parquet(chrom_file, columns=available)
+        # Normalize mixed String/Float columns across chromosomes (single pass)
+        float_casts = [c for c in chunk.columns if c not in vep_string_cols and chunk[c].dtype in (pl.Utf8, pl.String)]
+        if float_casts:
+            chunk = chunk.with_columns(*(pl.col(c).cast(pl.Float64, strict=False) for c in float_casts))
+        vep_dfs.append(chunk)
+    vep = pl.concat(vep_dfs, how="diagonal")
+    df = df.join(vep, on="variant_id", how="left")
 
     _t(f"{df.height:,} variants loaded")
 
     # ── Head classification ──────────────────────────────────────────────
-    cfg = json.loads((labeled / probe / "config.json").read_text())
+    cfg = json.loads((LABELED / PROBE / "config.json").read_text())
     # Support both old (ref_heads/diff_heads) and new (disruption_heads/effect_heads) config keys
     disruption_set = set(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
     effect_set = set(cfg.get("effect_heads", cfg.get("diff_heads", ())))
@@ -215,7 +259,7 @@ def main() -> None:
     _t("Loading embeddings...")
 
     def load_emb(path: Path) -> tuple[torch.Tensor, list[str]]:
-        storage = FilesystemStorage(path / probe)
+        storage = FilesystemStorage(path / PROBE)
         dataset = ActivationDataset(storage, "embeddings", batch_size=4096, include_provenance=True)
         embeddings, ids = [], []
         for batch in dataset.training_iterator(device="cpu", n_epochs=1, shuffle=False, drop_last=False):
@@ -226,13 +270,10 @@ def main() -> None:
             ids.extend(batch.sequence_ids)
         return torch.cat(embeddings), ids
 
-    emb_parts = [load_emb(labeled)]
-    if args.vus:
-        emb_parts.append(load_emb(args.vus))
-    emb = torch.nn.functional.normalize(
-        torch.cat([e for e, _ in emb_parts]).float(), dim=1,
-    )
-    emb_ids = [vid for _, ids in emb_parts for vid in ids]
+    emb_l, ids_l = load_emb(LABELED)
+    emb_v, ids_v = load_emb(VUS)
+    emb = torch.nn.functional.normalize(torch.cat([emb_l, emb_v]).float(), dim=1)
+    emb_ids = ids_l + ids_v
     n_emb = len(emb_ids)
 
     _t("GPU cosine similarity...")
@@ -305,17 +346,11 @@ def main() -> None:
     gene_to_idx = {g: i for i, g in enumerate(gene_list)}
 
     # ── Attribution ──────────────────────────────────────────────────────
-    attribution_path = labeled / probe / "attribution.pt"
+    attribution_path = LABELED / PROBE / "attribution.pt"
     if attribution_path.exists():
-        # Lazy import: attribution module may live in a sibling repo
-        try:
-            from src.attribution import AttributionModel
-        except ImportError:
-            gfm_gen_root = Path(__file__).parent.parent
-            sys.path.insert(0, str(gfm_gen_root))
-            from src.attribution import AttributionModel
+        from src.attribution import AttributionModel
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df, k=5, n_heads=8)
+        attr_df = attr_model.attribute(df, k=10)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:
@@ -436,7 +471,7 @@ def main() -> None:
         }
 
     eval_metrics = {}
-    eval_path = labeled / probe / "eval.json"
+    eval_path = LABELED / PROBE / "eval.json"
     if eval_path.exists():
         for h, info in json.loads(eval_path.read_text()).items():
             for key, label in EVAL_KEYS:
@@ -444,7 +479,7 @@ def main() -> None:
                     eval_metrics[h] = {"metric": label, "value": round(info[key], 2)}
                     break
 
-    decomp_path = labeled / probe / "score_decomposition.json"
+    decomp_path = LABELED / PROBE / "score_decomposition.json"
     (staging / "global.json").write_bytes(orjson.dumps({
         "umap": {
             "x": np.round(umap_coords[:, 0], 2).tolist(),
@@ -488,17 +523,16 @@ def main() -> None:
 
     # ── Copy static files ────────────────────────────────────────────────
     shutil.copy2(Path(__file__).parent / "index.html", staging / "index.html")
-    if args.vus:
-        interp_src = args.vus / "interpretations"
-        if interp_src.exists():
-            interp_dst = staging / "interpretations"
-            interp_dst.mkdir(parents=True, exist_ok=True)
-            for f in interp_src.glob("*.json"):
-                shutil.copy2(f, interp_dst / f.name)
+    interp_src = VUS / "interpretations"
+    if interp_src.exists():
+        interp_dst = staging / "interpretations"
+        interp_dst.mkdir(parents=True, exist_ok=True)
+        for f in interp_src.glob("*.json"):
+            shutil.copy2(f, interp_dst / f.name)
 
     # ── Sync or serve from staging ───────────────────────────────────────
-    out = args.output
-    no_sync = args.no_sync
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("webapp/build")
+    no_sync = "--no-sync" in sys.argv
 
     if no_sync:
         _t(f"Done. {n:,} variants in {staging} (--no-sync, skipping rsync)")

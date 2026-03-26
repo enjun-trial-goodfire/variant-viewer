@@ -96,7 +96,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .profile-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px;
   cursor: pointer; border-radius: 3px; transition: background 0.1s;
   &:hover { background: #f8f4ee; } }
-.profile-label { width: 180px; flex-shrink: 0; color: var(--text-secondary); }
+.profile-label { width: 220px; flex-shrink: 0; color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-bar-container { flex: 1; height: 16px; background: #f0ebe4;
   border-radius: 3px; overflow: visible; position: relative;
   & > div[style] { animation: bar-grow 0.4s cubic-bezier(0.22,1,0.36,1) both; } }
@@ -138,8 +139,6 @@ tr.benign td { background: #f5f8fe; }
   & strong { color: var(--text); } }
 .vus-callout { background: #fef8f2; border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
-.attribution-grid { display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap;
-  & span { color: var(--text-muted); } }
 
 /* ── Search results ───────────────────────────────────────────────── */
 .search-results { position: absolute; top: 100%; left: 0; right: 0;
@@ -627,6 +626,32 @@ function renderVariant(v) {
       </div>
     </div>`;
 
+  // --- Why This Prediction (attribution) ---
+  const attr = v.attribution;
+  if (attr?.baseline?.length || attr?.specific?.length) {
+    const allHeads = [...(attr.baseline || []), ...(attr.specific || [])];
+    const maxC = allHeads.reduce((m, h) => Math.max(m, Math.abs(h.contribution)), 0.01);
+    function renderAttrTier(title, heads) {
+      if (!heads?.length) return '';
+      let h = `<div style="margin:8px 0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${title}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">`;
+      for (const item of heads) {
+        const color = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
+        const dname = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+        const kindBadge = item.kind === 'disruption' ? ' <span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px">\u0394</span>' : '';
+        const barW = Math.min(Math.abs(item.contribution) / maxC * 100, 100);
+        h += `<span style="font-size:11px;background:color-mix(in srgb, ${color} 8%, var(--bg));border:1px solid color-mix(in srgb, ${color} 20%, transparent);border-radius:6px;padding:2px 8px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px" title="${item.name}: score=${item.score}, contribution=${item.contribution}">
+          <span style="display:inline-block;width:${Math.max(2, barW * 0.4)}px;height:4px;background:${color};border-radius:2px"></span>
+          ${dname}${kindBadge} <b style="color:${color}">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(2)}</b></span>`;
+      }
+      return h + '</div></div>';
+    }
+    html += `<div class="card"><div class="section-title">Why This Prediction</div>`;
+    html += renderAttrTier('Baseline drivers', attr.baseline);
+    html += renderAttrTier('Variant-specific', attr.specific);
+    html += `</div>`;
+  }
+
   // --- Flat lookups for predictors card ---
   const gt = v.gt || {};
   const effLookup = v.effect || {};
@@ -701,32 +726,6 @@ function renderVariant(v) {
   }
 
   html += '</div>';
-
-  if (v.attribution?.length) {
-    html += `<div class="card"><div class="section-title">Why This Prediction</div>
-      <div class="profile-legend">Top biological programs explaining the pathogenicity score</div>`;
-    for (const prog of v.attribution) {
-      const sign = prog.contribution > 0;
-      const color = sign ? 'var(--negative)' : 'var(--positive)';
-      const label = sign ? 'pathogenic' : 'protective';
-      const barW = Math.min(Math.abs(prog.contribution) / (Math.abs(v.attribution[0]?.contribution || 1)) * 100, 100);
-      html += `<div class="attr-program" style="margin:8px 0">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <div style="width:${barW}%;min-width:4px;height:6px;background:${color};border-radius:3px;transition:width 0.3s"></div>
-          <span style="font-size:12px;color:${color};font-weight:600;white-space:nowrap">${prog.contribution > 0 ? '+' : ''}${prog.contribution.toFixed(3)} ${label}</span>
-          ${prog.label ? `<span style="font-size:11px;color:var(--text-muted);margin-left:4px">${prog.label}</span>` : ''}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:4px">`;
-      for (const h of prog.heads) {
-        const hColor = h.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
-        const dname = globalData?.display?.[h.name] || h.name.replace(/_/g, ' ');
-        const kindBadge = h.kind === 'disruption' ? '<span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px;margin-left:2px">\u0394</span>' : '';
-        html += `<span class="attr-head" style="font-size:11px;background:color-mix(in srgb, ${hColor} 8%, var(--bg));border:1px solid color-mix(in srgb, ${hColor} 20%, transparent);border-radius:6px;padding:2px 8px;white-space:nowrap" title="${h.name}: score=${h.score}, contribution=${h.contribution}">${dname}${kindBadge} <b style="color:${hColor}">${h.contribution > 0 ? '+' : ''}${h.contribution.toFixed(3)}</b></span>`;
-      }
-      html += `</div></div>`;
-    }
-    html += `</div>`;
-  }
 
   html += `<div class="card"><div class="section-title">Nearest Neighbors</div>`;
   if (v.label === 'VUS' && v.neighbors.length) {
