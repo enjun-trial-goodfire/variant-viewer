@@ -1,9 +1,8 @@
 """Per-variant attribution for pathogenicity predictions.
 
-Two-tier approach:
-1. Ridge regression: y = beta^T scores + intercept (excluding clinical predictors)
-2. Per variant: rank heads by |beta_h * score_ih| (contribution to prediction)
-3. Split into "baseline" (always important) and "specific" (unique to this variant)
+Ridge regression on biological heads (excluding clinical predictors), then
+show the top-k heads by |beta_h * score_ih| per variant, split into effect
+and disruption groups.
 
     >>> model = AttributionModel.fit(scores_path, split_path)
     >>> model.save(probe_dir / "attribution.pt")
@@ -57,11 +56,7 @@ def _feature_matrix(df: pl.DataFrame, diff: tuple[str, ...], ref: tuple[str, ...
 
 
 class AttributionModel:
-    """Two-tier per-variant attribution.
-
-    Baseline heads appear in the top-k for most variants (always-on signal).
-    Variant-specific heads capture what's unique about each variant.
-    """
+    """Per-variant attribution: top-k heads by |beta * score|."""
 
     def __init__(
         self,
@@ -70,25 +65,21 @@ class AttributionModel:
         head_names: tuple[tuple[str, str], ...],
         diff_heads: tuple[str, ...],
         ref_heads: tuple[str, ...],
-        baseline_heads: tuple[int, ...],
     ):
         self.beta = beta
         self.intercept = intercept
         self.head_names = head_names
         self.diff_heads = diff_heads
         self.ref_heads = ref_heads
-        self.baseline_heads = set(baseline_heads)
 
     @classmethod
     def fit(
         cls,
         scores_path: Path,
         split_path: Path,
-        k_baseline: int = 10,
-        baseline_threshold: float = 0.5,
         device: str = "cuda",
     ) -> AttributionModel:
-        """Fit ridge + identify baseline heads by frequency."""
+        """Fit ridge on biological heads."""
         scores = pl.read_ipc(str(scores_path))
         split = pl.read_ipc(str(split_path))
         joined = scores.join(split, on="variant_id")
@@ -110,31 +101,20 @@ class AttributionModel:
             x_tr.T @ (y_tr - y_tr.mean()),
         )
         intercept = (y_tr.mean() - x_tr.mean(0) @ beta).item()
-
-        # Baseline: heads in top-k for >threshold of training variants
-        top_k = torch.topk((x_tr * beta[None, :]).abs(), k_baseline, dim=1).indices
-        freq = torch.zeros(p, device=device)
-        for j in range(k_baseline):
-            freq.scatter_add_(0, top_k[:, j], torch.ones(x_tr.size(0), device=device))
-        freq /= x_tr.size(0)
-
-        baseline = tuple(int(i) for i in torch.where(freq > baseline_threshold)[0])
         test_r2 = 1 - ((y[~train] - x[~train] @ beta - intercept) ** 2).sum() / ((y[~train] - y[~train].mean()) ** 2).sum()
-        logger.info(f"Ridge R²={test_r2:.4f}, {len(baseline)} baseline heads (>{baseline_threshold:.0%})")
-        for i in baseline:
-            logger.info(f"  {names[i][0]:35s} freq={freq[i]:.1%}")
+        logger.info(f"Ridge R²={test_r2:.4f}")
 
-        return cls(
-            beta=beta.cpu(), intercept=intercept, head_names=names,
-            diff_heads=diff, ref_heads=ref, baseline_heads=baseline,
-        )
+        return cls(beta=beta.cpu(), intercept=intercept, head_names=names,
+                   diff_heads=diff, ref_heads=ref)
 
-    def attribute(self, scores: pl.DataFrame, n_specific: int = 10) -> pl.DataFrame:
-        """Per-variant two-tier attribution.
+    def attribute(
+        self, scores: pl.DataFrame, k_effect: int = 8, k_disruption: int = 7,
+    ) -> pl.DataFrame:
+        """Top-k heads per variant, split by effect/disruption with separate quotas.
 
-        Returns DataFrame with variant_id, attribution_logit, attribution_json.
-        JSON schema: {"baseline": [...], "specific": [...]} where each entry has
-        name, kind, score, contribution.
+        JSON schema: {"effect": [...], "disruption": [...]}
+        Each entry: {name, score, contribution}
+        Sorted by |contribution| descending within each group.
         """
         features = _feature_matrix(scores, self.diff_heads, self.ref_heads)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -143,32 +123,28 @@ class AttributionModel:
         contrib = x * beta_d[None, :]
         logits = (contrib.sum(1) + self.intercept).cpu().numpy().round(4)
 
-        # Mask baseline heads, get top-n_specific from the rest
-        baseline_idx = sorted(self.baseline_heads)
-        non_baseline = contrib.clone()
-        non_baseline[:, baseline_idx] = 0
-        topk_specific = torch.topk(non_baseline.abs(), n_specific, dim=1).indices
+        n_eff = len(self.diff_heads)
+        eff_topk = torch.topk(contrib[:, :n_eff].abs(), min(k_effect, n_eff), dim=1).indices
+        dis_topk = torch.topk(contrib[:, n_eff:].abs(), min(k_disruption, contrib.size(1) - n_eff), dim=1).indices + n_eff
 
+        eff_topk = eff_topk.cpu().numpy()
+        dis_topk = dis_topk.cpu().numpy()
         contrib_cpu = contrib.cpu().numpy()
-        topk_cpu = topk_specific.cpu().numpy()
         names = self.head_names
 
         rows = []
         for i in range(x.size(0)):
-            baseline = [
-                {"name": names[h][0], "kind": names[h][1],
-                 "score": round(float(features[i, h]), 4),
+            effects = [
+                {"name": names[h][0], "score": round(float(features[i, h]), 4),
                  "contribution": round(float(contrib_cpu[i, h]), 4)}
-                for h in baseline_idx
+                for h in eff_topk[i] if abs(contrib_cpu[i, h]) > 1e-4
             ]
-            specific = [
-                {"name": names[h][0], "kind": names[h][1],
-                 "score": round(float(features[i, h]), 4),
+            disruptions = [
+                {"name": names[h][0], "score": round(float(features[i, h]), 4),
                  "contribution": round(float(contrib_cpu[i, h]), 4)}
-                for h in topk_cpu[i]
-                if abs(contrib_cpu[i, h]) > 1e-4
+                for h in dis_topk[i] if abs(contrib_cpu[i, h]) > 1e-4
             ]
-            rows.append(json.dumps({"baseline": baseline, "specific": specific}))
+            rows.append(json.dumps({"effect": effects, "disruption": disruptions}))
 
         return pl.DataFrame({
             "variant_id": scores["variant_id"],
@@ -177,16 +153,23 @@ class AttributionModel:
         })
 
     def save(self, path: Path) -> None:
-        path = Path(path)
+        path = Path(path).with_suffix(".json")
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            "beta": self.beta, "intercept": self.intercept,
+        data = {
+            "beta": self.beta.tolist(),
+            "intercept": self.intercept,
             "head_names": self.head_names,
-            "diff_heads": self.diff_heads, "ref_heads": self.ref_heads,
-            "baseline_heads": tuple(self.baseline_heads),
-        }, path)
+            "diff_heads": self.diff_heads,
+            "ref_heads": self.ref_heads,
+        }
+        path.write_text(json.dumps(data))
         logger.info(f"Saved attribution: {path}")
 
     @classmethod
     def load(cls, path: Path) -> AttributionModel:
-        return cls(**torch.load(path, map_location="cpu", weights_only=False))
+        data = json.loads(Path(path).read_text())
+        data["beta"] = torch.tensor(data["beta"], dtype=torch.float32)
+        data["head_names"] = tuple(tuple(x) for x in data["head_names"])
+        data["diff_heads"] = tuple(data["diff_heads"])
+        data["ref_heads"] = tuple(data["ref_heads"])
+        return cls(**data)

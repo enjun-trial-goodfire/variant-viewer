@@ -28,6 +28,8 @@ import torch
 from loguru import logger
 from sklearn.decomposition import PCA
 from tqdm import tqdm
+
+from attribution import AttributionModel
 from umap import UMAP
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -346,11 +348,10 @@ def main() -> None:
     gene_to_idx = {g: i for i, g in enumerate(gene_list)}
 
     # ── Attribution ──────────────────────────────────────────────────────
-    attribution_path = LABELED / PROBE / "attribution.pt"
+    attribution_path = LABELED / PROBE / "attribution.json"
     if attribution_path.exists():
-        from src.attribution import AttributionModel
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df, k=10)
+        attr_df = attr_model.attribute(df)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:

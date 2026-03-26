@@ -626,32 +626,6 @@ function renderVariant(v) {
       </div>
     </div>`;
 
-  // --- Why This Prediction (attribution) ---
-  const attr = v.attribution;
-  if (attr?.baseline?.length || attr?.specific?.length) {
-    const allHeads = [...(attr.baseline || []), ...(attr.specific || [])];
-    const maxC = allHeads.reduce((m, h) => Math.max(m, Math.abs(h.contribution)), 0.01);
-    function renderAttrTier(title, heads) {
-      if (!heads?.length) return '';
-      let h = `<div style="margin:8px 0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${title}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px">`;
-      for (const item of heads) {
-        const color = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
-        const dname = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-        const kindBadge = item.kind === 'disruption' ? ' <span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px">\u0394</span>' : '';
-        const barW = Math.min(Math.abs(item.contribution) / maxC * 100, 100);
-        h += `<span style="font-size:11px;background:color-mix(in srgb, ${color} 8%, var(--bg));border:1px solid color-mix(in srgb, ${color} 20%, transparent);border-radius:6px;padding:2px 8px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px" title="${item.name}: score=${item.score}, contribution=${item.contribution}">
-          <span style="display:inline-block;width:${Math.max(2, barW * 0.4)}px;height:4px;background:${color};border-radius:2px"></span>
-          ${dname}${kindBadge} <b style="color:${color}">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(2)}</b></span>`;
-      }
-      return h + '</div></div>';
-    }
-    html += `<div class="card"><div class="section-title">Why This Prediction</div>`;
-    html += renderAttrTier('Baseline drivers', attr.baseline);
-    html += renderAttrTier('Variant-specific', attr.specific);
-    html += `</div>`;
-  }
-
   // --- Flat lookups for predictors card ---
   const gt = v.gt || {};
   const effLookup = v.effect || {};
@@ -695,38 +669,55 @@ function renderVariant(v) {
     </div>`;
   }
 
-  html += `<div class="card">
-      <div class="section-title">Disruption Profile</div>
-      <div class="profile-legend">
-        <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:20px;height:10px;background:#bbb;opacity:.5;border-radius:2px;position:relative"><span style="position:absolute;top:2px;left:0;width:14px;height:6px;background:#bbb;border-radius:1px"></span></span> ref / var</span>
-        <span style="color:var(--negative)">\u2212 disrupted</span>
-        <span style="color:var(--positive)">+ gained</span>
-        <span><span style="display:inline-block;width:2px;height:10px;background:#333;vertical-align:middle;margin-right:2px"></span> database</span>
+  // --- Attribution ---
+  const attr = v.attribution;
+  if (attr?.effect?.length || attr?.disruption?.length) {
+    function attrEffectRow(item) {
+      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+      const badge = evalBadge(item.name);
+      const cc = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
+      return `<div class="profile-row">
+        <div class="profile-label">${name}${badge}</div>
+        <div class="profile-bar-container">
+          <div class="profile-bar" style="width:${Math.max(2, item.score * 100)}%;background:${barColor(item.score)}"></div>
+        </div>
+        <div class="profile-value" style="color:${cc};font-weight:600">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(3)}</div>
       </div>`;
-
-  for (const [gname, keys] of Object.entries(globalData.heads.disruption)) {
-    const items = keys
-      .filter(k => v.disruption?.[k])
-      .map(k => ({key: k, ref: v.disruption[k][0], var: v.disruption[k][1], gt: v.gt?.[k]}))
-      .sort((a, b) => Math.abs(b.var - b.ref) - Math.abs(a.var - a.ref));
-    if (items.length) html += renderGroup(gname, items, disruptionRow, 'ref');
+    }
+    function attrDisruptionRow(item) {
+      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+      const badge = evalBadge(item.name);
+      const d = item.score;
+      const cc = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
+      const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d < 0 ? 'var(--negative)' : 'var(--positive)';
+      const pct = Math.min(Math.abs(d) * 200, 50);
+      const side = d >= 0 ? 'left:50%' : `left:${50 - pct}%`;
+      return `<div class="profile-row">
+        <div class="profile-label">${name}${badge}</div>
+        <div class="profile-bar-container" style="position:relative">
+          <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>
+          <div style="position:absolute;${side};width:${pct}%;height:10px;background:${dc};border-radius:2px;top:3px"></div>
+        </div>
+        <div class="profile-delta" style="color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(3)}</div>
+        <div class="profile-value" style="color:${cc};font-weight:600">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(3)}</div>
+      </div>`;
+    }
+    html += `<div class="card"><div class="section-title">Score Attribution</div>
+      <div class="profile-legend">Top biological features driving the pathogenicity score (R\u00b2 = 0.92)</div>`;
+    if (attr.effect?.length) {
+      html += `<div class="profile-group"><div class="profile-group-title">Variant Effects</div>`;
+      html += attr.effect.map(attrEffectRow).join('');
+      html += `</div>`;
+    }
+    if (attr.disruption?.length) {
+      html += `<div class="profile-group"><div class="profile-group-title">Disruptions</div>`;
+      html += attr.disruption.map(attrDisruptionRow).join('');
+      html += `</div>`;
+    }
+    html += `</div>`;
   }
 
-  html += `</div>
-    <div class="card">
-      <div class="section-title">Variant Effects</div>
-      <div class="profile-legend">How this mutation changes biological and clinical features</div>`;
-
-  for (const [gname, keys] of Object.entries(globalData.heads.effect)) {
-    const items = keys
-      .filter(k => v.effect?.[k] != null)
-      .map(k => ({key: k, val: v.effect[k], gt: v.gt?.[k]}))
-      .sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
-    if (items.length) html += renderGroup(gname, items, effectRow, 'eff');
-  }
-
-  html += '</div>';
-
+  // --- Nearest Neighbors ---
   html += `<div class="card"><div class="section-title">Nearest Neighbors</div>`;
   if (v.label === 'VUS' && v.neighbors.length) {
     const ch = v.nP > v.nB * 2 ? 'predominantly pathogenic' : v.nB > v.nP * 2 ? 'predominantly benign' : 'mixed';
@@ -745,6 +736,36 @@ function renderVariant(v) {
   html += '</table></div>';
   html += `<div class="card"><div class="section-title">Score Distribution</div>
     <div class="distribution-container"><canvas id="dist-chart"></canvas></div></div>`;
+
+  // --- Raw Head Scores (show more) ---
+  {
+    let rawHtml = '';
+    rawHtml += `<div class="section-title" style="margin-top:8px">Disruption Profile</div>
+      <div class="profile-legend">
+        <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:20px;height:10px;background:#bbb;opacity:.5;border-radius:2px;position:relative"><span style="position:absolute;top:2px;left:0;width:14px;height:6px;background:#bbb;border-radius:1px"></span></span> ref / var</span>
+        <span style="color:var(--negative)">\u2212 disrupted</span>
+        <span style="color:var(--positive)">+ gained</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#333;vertical-align:middle;margin-right:2px"></span> database</span>
+      </div>`;
+    for (const [gname, keys] of Object.entries(globalData.heads.disruption)) {
+      const items = keys
+        .filter(k => v.disruption?.[k])
+        .map(k => ({key: k, ref: v.disruption[k][0], var: v.disruption[k][1], gt: v.gt?.[k]}))
+        .sort((a, b) => Math.abs(b.var - b.ref) - Math.abs(a.var - a.ref));
+      if (items.length) rawHtml += renderGroup(gname, items, disruptionRow, 'ref');
+    }
+    rawHtml += `<div class="section-title" style="margin-top:16px">Variant Effects</div>
+      <div class="profile-legend">How this mutation changes biological and clinical features</div>`;
+    for (const [gname, keys] of Object.entries(globalData.heads.effect)) {
+      const items = keys
+        .filter(k => v.effect?.[k] != null)
+        .map(k => ({key: k, val: v.effect[k], gt: v.gt?.[k]}))
+        .sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
+      if (items.length) rawHtml += renderGroup(gname, items, effectRow, 'eff');
+    }
+    html += `<div id="raw-heads-content" style="display:none"><div class="card">${rawHtml}</div></div>
+      <div class="show-more" style="text-align:center;padding:8px;font-size:12px;color:var(--accent);cursor:pointer" onclick="const el=document.getElementById('raw-heads-content');el.style.display=el.style.display==='none'?'block':'none';this.textContent=el.style.display==='none'?'Show all head scores':'Hide head scores'">Show all head scores</div>`;
+  }
 
   // --- Population Frequency card (bottom, detail-level) ---
   const hasFreq = v.gnomad_pop && Object.values(v.gnomad_pop).some(f => f != null && f > 0);
@@ -772,20 +793,25 @@ function renderVariant(v) {
   content.innerHTML = html;
   renderDistChart(v);
 
-  // Lazy interpretation card — only inserted if it exists
+  // Lazy interpretation card — placeholder shown immediately, replaced if interpretation exists
+  content.querySelector('.verdict')?.insertAdjacentHTML('afterend',
+    `<div class="card interp-card" id="interp-placeholder">
+      <div class="section-title">AI Interpretation</div>
+      <div style="font-size:12px;color:var(--text-muted)">No interpretation available for this variant yet.</div>
+    </div>`);
   fetch(`interpretations/${safeVariantId(v.id)}.json`)
     .then(r => { if (!r.ok) throw new Error(); return r.json(); })
     .then(interp => {
       if (!interp || interp.status !== 'ok') return;
       const cc = interp.confidence === 'high' ? 'conf-high' : interp.confidence === 'medium' ? 'conf-medium' : 'conf-low';
-      content.querySelector('.verdict')?.insertAdjacentHTML('afterend',
-        `<div class="card interp-card">
+      const el = document.getElementById('interp-placeholder');
+      if (el) el.outerHTML = `<div class="card interp-card">
           <div class="section-title">AI Interpretation <span class="interp-confidence ${cc}">${interp.confidence} confidence</span></div>
           <div class="interp-summary">${interp.summary}</div>
           <div class="interp-mechanism"><b>Mechanism:</b> ${interp.mechanism}</div>
           <div class="section-title" style="margin-top:12px;font-size:11px">Key Evidence</div>
           <ul class="interp-evidence">${interp.key_evidence.map(e => `<li>${e}</li>`).join('')}</ul>
-        </div>`);
+        </div>`;
     }).catch(() => {});
 }
 
