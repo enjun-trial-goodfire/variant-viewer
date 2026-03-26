@@ -366,7 +366,7 @@ def main() -> None:
     attribution_path = LABELED / PROBE / "attribution.json"
     if attribution_path.exists():
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df)
+        attr_df = attr_model.attribute(df, n_specific=10)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:
