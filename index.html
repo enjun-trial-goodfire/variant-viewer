@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variant Effect Viewer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #faf8f5; --bg-card: #fff; --text: #1a1a1a; --text-secondary: #555;
+  --text-muted: #999; --accent: #DB8A48; --accent-light: #f0d4b4;
+  --border: #e8e0d4; --positive: #4a9; --negative: #c55; --radius: 10px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+/* ── View Transitions ──────────────────────────────────────────────── */
+::view-transition-old(root) { animation: vt-fade-out 0.15s ease-out; }
+::view-transition-new(root) { animation: vt-fade-in 0.2s ease-out; }
+@keyframes vt-fade-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes vt-fade-in { from { opacity: 0; transform: translateY(6px); } }
+::view-transition-old(header), ::view-transition-new(header) { animation: none; }
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.header {
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+  position: sticky; top: 0; z-index: 100; view-transition-name: header;
+
+  & h1 { font-size: 16px; font-weight: 600; white-space: nowrap; cursor: pointer;
+    transition: color 0.15s; &:hover { color: var(--accent); } }
+  & input { width: 100%; padding: 8px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    &:focus { outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-light); } }
+}
+.search-container { flex: 1; max-width: 560px; margin: 0 auto; position: relative; }
+.header::after { content: ''; width: 150px; flex-shrink: 0; pointer-events: none; }
+
+/* ── Layout & Cards ───────────────────────────────────────────────── */
+.container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.card {
+  background: var(--bg-card); border: 1px solid color-mix(in srgb, #000 4%, transparent);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+  box-shadow: 0 1px 3px color-mix(in srgb, #000 4%, transparent),
+              0 4px 14px color-mix(in srgb, #000 2.5%, transparent);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  &:hover { box-shadow: 0 2px 6px color-mix(in srgb, #000 6%, transparent),
+                         0 8px 24px color-mix(in srgb, #000 4%, transparent); }
+}
+.container > .card { animation: card-enter 0.3s ease both; }
+.container > .card:nth-child(2) { animation-delay: 0.04s; }
+.container > .card:nth-child(3) { animation-delay: 0.08s; }
+.container > .card:nth-child(4) { animation-delay: 0.12s; }
+.container > .card:nth-child(5) { animation-delay: 0.16s; }
+.container > .card:nth-child(6) { animation-delay: 0.20s; }
+@keyframes card-enter { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Verdict ──────────────────────────────────────────────────────── */
+.verdict { display: flex; align-items: center; gap: 24px; }
+.verdict-info { flex: 1; }
+.verdict-gene { font-size: 28px; font-weight: 700; }
+.verdict-id { font-size: 13px; color: var(--text-secondary); font-family: monospace; }
+.verdict-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.verdict-links { font-size: 12px; margin-top: 6px; display: flex; gap: 2px; flex-wrap: wrap; }
+.verdict-links a { color: var(--text-muted); padding: 1px 6px; border-radius: 3px;
+  transition: color 0.1s, background 0.1s; }
+.verdict-links a:hover { color: var(--accent); background: var(--accent-light); text-decoration: none; }
+.verdict-links .sep { color: var(--border); }
+.verdict-score { text-align: center; min-width: 150px;
+  & .score-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 2px; }
+  & .number { font-size: 48px; font-weight: 700; font-family: "SF Mono", monospace; transition: color 0.3s; }
+}
+
+/* ── Labels ───────────────────────────────────────────────────────── */
+.label-badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.label-pathogenic { background: #fde; color: var(--negative); }
+.label-benign { background: #def; color: #27a; }
+.label-vus { background: #eee; color: #666; }
+
+/* ── Sections ─────────────────────────────────────────────────────── */
+.section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--text-muted); margin: 0 0 10px; font-weight: 600; }
+
+/* ── Profile bars ─────────────────────────────────────────────────── */
+.profile-group { margin-bottom: 16px; }
+.profile-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--accent); font-weight: 600; margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border); }
+.profile-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px;
+  cursor: pointer; border-radius: 3px; transition: background 0.1s;
+  &:hover { background: #f8f4ee; } }
+.profile-label { width: 180px; flex-shrink: 0; color: var(--text-secondary); }
+.profile-bar-container { flex: 1; height: 16px; background: #f0ebe4;
+  border-radius: 3px; overflow: visible; position: relative;
+  & > div[style] { animation: bar-grow 0.4s cubic-bezier(0.22,1,0.36,1) both; } }
+@keyframes bar-grow { from { transform: scaleX(0); transform-origin: left; } }
+.profile-bar { height: 100%; border-radius: 3px; }
+.profile-bar-ref { position: absolute; top: 0; left: 0; height: 100%; opacity: 0.5; border-radius: 3px; }
+.profile-bar-var { position: absolute; top: 3px; left: 0; height: calc(100% - 6px); border-radius: 2px; }
+.profile-db-marker { position: absolute; top: -1px; width: 2px; height: calc(100% + 2px);
+  background: #333; border-radius: 1px; z-index: 1; }
+.profile-value { width: 50px; text-align: right; font-family: monospace;
+  font-size: 11px; color: var(--text-secondary); flex-shrink: 0; margin-left: 8px; }
+.profile-delta { width: 48px; text-align: right; font-family: monospace;
+  font-size: 10px; font-weight: 600; flex-shrink: 0; margin-left: 2px; }
+.profile-legend { font-size: 10px; color: var(--text-muted); margin-bottom: 8px;
+  display: flex; gap: 10px; align-items: center; }
+.show-more { padding: 4px 0; font-size: 11px; color: var(--accent); cursor: pointer; }
+
+/* ── Detail expansion ─────────────────────────────────────────────── */
+.profile-detail { display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease; overflow: hidden;
+  border-top: 1px solid var(--border); margin-top: 4px;
+  &.open { grid-template-rows: 1fr; }
+  & > .detail-inner { overflow: hidden; padding: 0; transition: padding 0.25s ease; }
+  &.open > .detail-inner { padding: 10px 0; }
+  & .chart-wrap { position: relative; width: 100%; height: 160px; }
+  & .detail-summary { font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-top: 6px; }
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px;
+  color: var(--text-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+td { padding: 6px 10px; border-bottom: 1px solid #f0ebe4; }
+td.mono { font-family: monospace; font-size: 11px; }
+tr { transition: transform 0.1s ease; &:hover { background: #f8f4ee; transform: translateX(2px); } }
+tr.pathogenic td { background: #fef8f5; }
+tr.benign td { background: #f5f8fe; }
+.neighbor-summary { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;
+  & strong { color: var(--text); } }
+.vus-callout { background: #fef8f2; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
+.attribution-grid { display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap;
+  & span { color: var(--text-muted); } }
+
+/* ── Search results ───────────────────────────────────────────────── */
+.search-results { position: absolute; top: 100%; left: 0; right: 0;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  max-height: 400px; overflow-y: auto;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 10%, transparent),
+              0 12px 40px color-mix(in srgb, #000 6%, transparent);
+  z-index: 200; opacity: 0; transform: translateY(-4px) scale(0.98);
+  transition: opacity 0.15s ease, transform 0.15s ease; pointer-events: none;
+  &.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; } }
+.search-item { padding: 8px 14px; cursor: pointer; display: flex;
+  justify-content: space-between; align-items: center; font-size: 12px; gap: 12px;
+  transition: background 0.1s; &:hover { background: var(--bg); }
+  & .vid { font-family: monospace; flex-shrink: 0; }
+  & .meta { color: var(--text-muted); text-align: right; } }
+
+/* ── UMAP ─────────────────────────────────────────────────────────── */
+.umap-landing { text-align: center;
+  & h2 { font-size: 18px; margin-bottom: 4px; color: var(--text-secondary); }
+  & p { color: var(--text-muted); margin-bottom: 16px; font-size: 13px; } }
+.umap-wrap { display: inline-block; position: relative; width: 900px; height: 600px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 4%, transparent); }
+#umap-tooltip { position: fixed; background: color-mix(in srgb, #fff 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
+  font-size: 11px; pointer-events: none;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 10%, transparent);
+  display: none; z-index: 300; line-height: 1.5; }
+.umap-toggle { padding: 5px 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); font-size: 12px; cursor: pointer; color: var(--text-secondary);
+  transition: all 0.15s ease;
+  &:hover { border-color: var(--accent); background: #fef8f2; }
+  &.active { background: var(--accent); color: white; border-color: var(--accent); } }
+
+/* ── Interpretation ───────────────────────────────────────────────── */
+.interp-card { border-left: 3px solid var(--accent); }
+.interp-summary { font-size: 13px; line-height: 1.6; color: var(--text); margin-bottom: 12px; }
+.interp-mechanism { font-size: 12px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 12px; }
+.interp-evidence { list-style: none; padding: 0;
+  & li { font-size: 12px; color: var(--text-secondary); padding: 3px 0 3px 16px; position: relative;
+    &::before { content: "\2192"; position: absolute; left: 0; color: var(--accent); } } }
+.interp-confidence { display: inline-block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.conf-high { background: #dfd; color: #384; }
+.conf-medium { background: #fed; color: #974; }
+.conf-low { background: #fdd; color: #944; }
+
+.distribution-container { position: relative; width: 100%; height: 220px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 onclick="navigate('')">Variant Effect Viewer</h1>
+  <div class="search-container">
+    <input type="text" id="search" placeholder="Search gene or variant (BRCA1, chr17:43093110:C:T)" autocomplete="off">
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<div class="container" id="content"></div>
+<div id="umap-tooltip"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+const content = document.getElementById('content');
+const tooltip = document.getElementById('umap-tooltip');
+
+let distributionData = null, umapData = null, distChart = null, currentVariant = null;
+let globalData = null, searchIndex = null, searchIndexPromise = null;
+const headDistCache = {}, detailCharts = {};
+const LABEL_NAMES = ['benign', 'pathogenic', 'VUS'];
+const COLLAPSE_THRESHOLD = 5;
+
+// ── Helpers ──────────────────────────────────────────────────────────
+function viewTransition(fn) { document.startViewTransition ? document.startViewTransition(fn) : fn(); }
+function navigate(path) { location.hash = path ? `#/${path}` : '#/'; }
+function safeVariantId(vid) {
+  const s = vid.replace(/:/g, '_').replace(/\//g, '_');
+  if (s.length <= 200) return s;
+  // FNV-1a 64-bit, matching Python's sanitize_vid
+  let h = 0xCBF29CE484222325n;
+  for (let i = 0; i < vid.length; i++) h = ((h ^ BigInt(vid.charCodeAt(i))) * 0x100000001B3n) & 0xFFFFFFFFFFFFFFFFn;
+  return s.slice(0, 60) + '_' + h.toString(16).padStart(16, '0');
+}
+function truncate(s, n = 30) { return s.length > n ? s.slice(0, n - 2) + '\u2026' : s; }
+function scoreColor(s) { return `rgb(${Math.round(215*s)}, 80, ${Math.round(178*(1-s))})`; }
+function displayName(head) { return globalData?.display?.[head] || head; }
+
+const LABEL_DISPLAY = {
+  'pathogenic': 'Pathogenic', 'likely_pathogenic': 'Likely Pathogenic',
+  'benign': 'Benign', 'likely_benign': 'Likely Benign', 'VUS': 'VUS',
+};
+function labelBadge(label) {
+  const cls = label.includes('pathogenic') ? 'pathogenic' : label.includes('benign') ? 'benign' : 'vus';
+  return `<span class="label-badge label-${cls}">${LABEL_DISPLAY[label] || label.replace(/_/g, ' ')}</span>`;
+}
+
+const CSQ_DISPLAY = {
+  'missense_variant': 'Missense', 'synonymous_variant': 'Synonymous',
+  'frameshift_variant': 'Frameshift', 'nonsense': 'Nonsense', 'stop_gained': 'Stop Gained',
+  'splice_donor_variant': 'Splice Donor', 'splice_acceptor_variant': 'Splice Acceptor',
+  'splice_region_variant': 'Splice Region', 'intron_variant': 'Intronic',
+  'non-coding_transcript_variant': 'Non-coding', 'start_lost': 'Start Lost',
+  'stop_lost': 'Stop Lost', 'inframe_deletion': 'In-frame Deletion',
+  'inframe_insertion': 'In-frame Insertion', 'inframe_indel': 'In-frame Indel',
+  '5_prime_UTR_variant': "5' UTR", '3_prime_UTR_variant': "3' UTR",
+  'genic_downstream_transcript_variant': 'Downstream', 'genic_upstream_transcript_variant': 'Upstream',
+  'initiator_codon_variant': 'Initiator Codon', 'no_sequence_alteration': 'No Change',
+};
+function humanConsequence(c) { return !c ? '' : CSQ_DISPLAY[c] || c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); }
+
+function barColor(v) {
+  if (v > 0.9) return '#c55'; if (v > 0.75) return '#DB8A48';
+  if (v < 0.1) return '#27a'; if (v < 0.25) return '#6ac'; return '#bbb';
+}
+
+function evalBadge(head) {
+  const e = globalData?.eval?.[head];
+  return e ? ` <span style="font-size:9px;color:var(--text-muted)">${e.metric}=${e.value}</span>` : '';
+}
+
+// ── Data loading ─────────────────────────────────────────────────────
+const globalReady = fetch('global.json').then(r => r.json()).then(g => {
+  umapData = g.umap;
+  distributionData = g.distribution;
+  globalData = { heads: g.heads, display: g.display, eval: g.eval };
+  Object.assign(headDistCache, g.head_distributions);
+  if (document.getElementById('umap-container')) renderUmap();
+  if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
+});
+
+function ensureSearchIndex() {
+  searchIndexPromise ??= fetch('search.json').then(r => r.json()).then(idx => { searchIndex = idx; });
+  return searchIndexPromise;
+}
+
+// ── Routing ──────────────────────────────────────────────────────────
+function route() {
+  tooltip.style.display = 'none';
+  const hash = location.hash || '#/';
+  hash.startsWith('#/variant/')
+    ? loadVariant(decodeURIComponent(hash.slice('#/variant/'.length)))
+    : showLanding();
+}
+window.addEventListener('hashchange', route);
+window.addEventListener('DOMContentLoaded', route);
+
+// ── Search ───────────────────────────────────────────────────────────
+function clientSearch(query) {
+  if (!searchIndex) return [];
+  const q = query.trim().toUpperCase();
+  const entries = searchIndex[q] || Object.keys(searchIndex).filter(k => k.startsWith(q)).flatMap(k => searchIndex[k]);
+  return entries.sort((a, b) => b.s - a.s).slice(0, 30);
+}
+
+function renderSearchResults(results) {
+  searchResults.innerHTML = results.length
+    ? results.map(r => `<div class="search-item" onclick="navigate('variant/${r.v}')">
+        <span class="vid" title="${r.v}">${truncate(r.v)}</span>
+        <span class="meta">${humanConsequence(r.c)} \u00b7 ${LABEL_DISPLAY[r.l] || r.l}</span></div>`).join('')
+    : '<div class="search-item"><span class="meta">No results</span></div>';
+  searchResults.classList.add('visible');
+}
+
+let searchTimeout = null;
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimeout);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { searchResults.classList.remove('visible'); return; }
+  if (q.includes(':') && q.split(':').length >= 4) {
+    searchResults.classList.remove('visible');
+    navigate(`variant/${q}`); return;
+  }
+  searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+});
+searchInput.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = searchInput.value.trim();
+  searchResults.classList.remove('visible');
+  if (q.includes(':') && q.split(':').length >= 4) navigate(`variant/${q}`);
+  else ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
+});
+
+// ── Bar rows (items pre-sorted by build.py) ─────────────────────────
+// Disruption item: {key, ref, var, gt} — display name from globalData.display
+// Effect item:     {key, val, gt}
+function disruptionRow(it) {
+  const name = displayName(it.key), bc = barColor(it.ref), d = it.var - it.ref;
+  const badge = evalBadge(it.key);
+  const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d < 0 ? 'var(--negative)' : 'var(--positive)';
+  const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
+  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${it.var},this,${it.gt ?? 'null'})">
+    <div class="profile-label">${name}${badge}</div>
+    <div class="profile-bar-container">
+      <div class="profile-bar-ref" style="width:${Math.max(2,it.ref*100)}%;background:${bc}"></div>
+      <div class="profile-bar-var" style="width:${Math.max(2,it.var*100)}%;background:${bc}"></div>${gtM}
+    </div>
+    <div class="profile-value">${it.var.toFixed(3)}</div>
+    <div class="profile-delta" style="color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(2)}</div>
+  </div>`;
+}
+
+function effectRow(it) {
+  const name = displayName(it.key), bc = barColor(it.val);
+  const badge = evalBadge(it.key);
+  const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
+  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${it.val},this,${it.gt ?? 'null'})">
+    <div class="profile-label">${name}${badge}</div>
+    <div class="profile-bar-container">
+      <div class="profile-bar" style="width:${Math.max(2,it.val*100)}%;background:${bc}"></div>${gtM}
+    </div>
+    <div class="profile-value">${it.val.toFixed(3)}</div>
+  </div>`;
+}
+
+// ── Collapsible group (items sorted by JS from flat variant values) ───
+function renderGroup(groupName, items, renderItem, prefix) {
+  const visible = items.slice(0, COLLAPSE_THRESHOLD);
+  const hidden = items.slice(COLLAPSE_THRESHOLD);
+  const gid = `${prefix}-${groupName.replace(/\s+/g, '-').toLowerCase()}`;
+  let html = `<div class="profile-group"><div class="profile-group-title">${groupName}</div>`;
+  html += visible.map(renderItem).join('');
+  if (hidden.length) {
+    html += `<div id="more-${gid}" style="display:none">${hidden.map(renderItem).join('')}</div>`;
+    html += `<div class="show-more" onclick="toggleMore(this,'${gid}',${items.length})">Show all ${items.length}</div>`;
+  }
+  return html + '</div>';
+}
+
+function toggleMore(el, gid, total) {
+  const t = document.getElementById('more-' + gid);
+  const show = t.style.display === 'none';
+  t.style.display = show ? 'block' : 'none';
+  el.textContent = show ? 'Show less' : `Show all ${total}`;
+}
+
+// ── Detail expansion ─────────────────────────────────────────────────
+function toggleBarDetail(head, label, value, rowEl, gt) {
+  const did = `detail-${head}`;
+  const existing = document.getElementById(did);
+  if (existing?.classList.contains('open')) {
+    existing.classList.remove('open');
+    setTimeout(() => { detailCharts[did]?.destroy(); delete detailCharts[did]; }, 300);
+    return;
+  }
+  document.querySelectorAll('.profile-detail.open').forEach(el => {
+    el.classList.remove('open');
+    setTimeout(() => { detailCharts[el.id]?.destroy(); delete detailCharts[el.id]; }, 300);
+  });
+  let detail = existing;
+  if (!detail) {
+    detail = document.createElement('div');
+    detail.id = did; detail.className = 'profile-detail';
+    detail.innerHTML = '<div class="detail-inner"><div class="chart-wrap"><canvas></canvas></div><div class="detail-summary"></div></div>';
+    rowEl.after(detail);
+  }
+  requestAnimationFrame(() => detail.classList.add('open'));
+
+  let summary = `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${currentVariant.consequence}.`;
+  if (gt != null) {
+    const err = Math.abs(value - gt);
+    const cal = err < 0.05 ? 'well-calibrated' : err < 0.15 ? 'close' : err < 0.35 ? 'moderately off' : 'poorly calibrated';
+    summary += ` Database: <b>${gt.toFixed(3)}</b> (${cal}, |err|=${err.toFixed(3)}).`;
+  } else summary += ' No database value available.';
+  detail.querySelector('.detail-summary').innerHTML = summary;
+  if (headDistCache[head]) renderDetailChart(did, headDistCache[head], value);
+}
+
+function renderDetailChart(did, data, value) {
+  const ctx = document.getElementById(did).querySelector('canvas').getContext('2d');
+  const bins = data.bins, mb = Math.min(bins - 1, Math.max(0, Math.floor(value * bins)));
+  detailCharts[did]?.destroy();
+  detailCharts[did] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: Array.from({length: bins}, (_, i) => (i / bins).toFixed(2)),
+      datasets: [
+        { label: 'Benign', data: data.benign, backgroundColor: 'rgba(34,119,170,0.35)', borderWidth: 0 },
+        { label: 'Pathogenic', data: data.pathogenic, backgroundColor: 'rgba(204,85,85,0.35)', borderWidth: 0 },
+      ] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      scales: { x: { display: false }, y: { display: false } },
+      plugins: { legend: { position: 'top', labels: { boxWidth: 8, font: { size: 9 } } } } },
+    plugins: [{ id: 'mk', afterDraw(chart) {
+      const meta = chart.getDatasetMeta(0); if (!meta.data[mb]) return;
+      const c = chart.ctx; c.save(); c.beginPath();
+      c.moveTo(meta.data[mb].x, chart.chartArea.top);
+      c.lineTo(meta.data[mb].x, chart.chartArea.bottom);
+      c.strokeStyle = '#333'; c.lineWidth = 2; c.setLineDash([4, 2]); c.stroke(); c.restore();
+    }}],
+  });
+}
+
+// ── UMAP landing ─────────────────────────────────────────────────────
+let umapMode = 'predicted';
+
+function showLanding() {
+  searchInput.value = '';
+  viewTransition(() => {
+    const scoreLeg = `<span style="display:inline-flex;align-items:center;gap:6px">
+      <span style="font-size:10px">0.0</span>
+      <span style="display:inline-block;width:120px;height:10px;border-radius:3px;background:linear-gradient(to right, rgb(33,120,171), #bbb 50%, rgb(204,85,85))"></span>
+      <span style="font-size:10px">1.0</span></span>`;
+    const labelLeg = [['pathogenic','#c55'],['likely path.','#DB8A48'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']]
+      .map(([n,c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c}${n==='VUS'?';opacity:0.6':''}"></span> ${n}</span>`).join('');
+
+    content.innerHTML = `<div class="umap-landing">
+      <h2>Variant Embedding Space</h2>
+      <p>30k variants. Click a point to view its card.</p>
+      <div style="margin-bottom:10px;display:flex;gap:4px;justify-content:center">
+        <button class="umap-toggle ${umapMode==='predicted'?'active':''}" data-mode="predicted" onclick="setUmapMode('predicted')">Effect score</button>
+        <button class="umap-toggle ${umapMode==='labeled'?'active':''}" data-mode="labeled" onclick="setUmapMode('labeled')">ClinVar label</button>
+      </div>
+      <div class="umap-wrap" id="umap-container"></div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text-muted);display:flex;gap:12px;justify-content:center;align-items:center">
+        ${umapMode === 'predicted' ? scoreLeg : labelLeg}
+      </div>
+    </div>`;
+    if (umapData) renderUmap();
+  });
+}
+
+function setUmapMode(mode) {
+  umapMode = mode;
+  document.querySelectorAll('.umap-toggle').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  if (document.getElementById('umap-container') && umapData) renderUmap();
+}
+
+function getUmapColors() {
+  const {score, labels} = umapData;
+  const lc = { pathogenic: [.80,.33,.33,.8], likely_pathogenic: [.86,.54,.28,.8],
+    benign: [.13,.47,.67,.8], likely_benign: [.42,.67,.80,.8], VUS: [.63,.63,.63,.4] };
+  if (umapMode === 'labeled') return labels.map(l => lc[LABEL_NAMES[l] || l] || lc.VUS);
+  return score.map(s => {
+    if (s < 0.5) { const t = s * 2; return [.13+t*.53, .47+t*.20, .67, .8]; }
+    const t = (s - .5) * 2; return [.67+t*.13, .67-t*.33, .67-t*.33, .8];
+  });
+}
+
+function renderUmap() {
+  const container = document.getElementById('umap-container');
+  if (!container || !umapData) return;
+  container.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  container.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  const dpr = devicePixelRatio || 1, W = 900, H = 600;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  canvas.width = W * dpr; canvas.height = H * dpr; ctx.scale(dpr, dpr);
+
+  const {x, y, score, ids, genes, labels, gene_list} = umapData;
+  const labelStr = labels.map(l => LABEL_NAMES[l] || '?');
+  const geneStr = gene_list ? genes.map(g => gene_list[g] || '?') : genes;
+  const n = x.length;
+  const xMin = x.reduce((a,b) => Math.min(a,b)), xMax = x.reduce((a,b) => Math.max(a,b));
+  const yMin = y.reduce((a,b) => Math.min(a,b)), yMax = y.reduce((a,b) => Math.max(a,b));
+  const pad = 15, w = W - 2*pad, h = H - 2*pad;
+  const px = new Float32Array(n), py = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    px[i] = pad + (x[i] - xMin) / (xMax - xMin) * w;
+    py[i] = pad + (y[i] - yMin) / (yMax - yMin) * h;
+  }
+
+  ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, H);
+  const colors = getUmapColors();
+  const lp = { benign: 0, likely_benign: 1, VUS: 2, likely_pathogenic: 3, pathogenic: 4 };
+  const order = Array.from({length: n}, (_, i) => i).sort((a, b) =>
+    umapMode === 'labeled' ? (lp[labelStr[a]]||2) - (lp[labelStr[b]]||2) : score[a] - score[b]);
+  for (const i of order) {
+    const c = colors[i], alpha = (umapMode === 'labeled' && labelStr[i] === 'VUS') ? .35 : .7;
+    ctx.fillStyle = `rgba(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0},${alpha})`;
+    ctx.beginPath(); ctx.arc(px[i], py[i], 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function findNearest(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = (e.clientX - cr.left) * (W / cr.width), my = (e.clientY - cr.top) * (H / cr.height);
+    let best = -1, bestD = 12;
+    for (let i = 0; i < n; i++) { const d = Math.hypot(mx - px[i], my - py[i]); if (d < bestD) { bestD = d; best = i; } }
+    return best;
+  }
+  let raf = false;
+  canvas.onmousemove = e => { if (raf) return; raf = true; requestAnimationFrame(() => { raf = false;
+    const i = findNearest(e);
+    if (i >= 0) {
+      const s = score[i], lbl = labelStr[i];
+      const c = lbl.includes('pathogenic') ? '#c55' : lbl.includes('benign') ? '#27a' : '#666';
+      tooltip.style.display = 'block'; tooltip.style.left = (e.clientX+14)+'px'; tooltip.style.top = (e.clientY-10)+'px';
+      tooltip.innerHTML = `<b>${geneStr[i]||'?'}</b> <span style="color:${c};font-weight:600">${lbl}</span><br>
+        <span style="font-family:monospace;font-size:10px">${ids[i]}</span><br>
+        Effect score: <b style="color:${scoreColor(s)}">${s.toFixed(3)}</b>`;
+      canvas.style.cursor = 'pointer';
+    } else { tooltip.style.display = 'none'; canvas.style.cursor = 'crosshair'; }
+  }); };
+  canvas.onclick = e => { canvas.onmousemove = null; tooltip.style.display = 'none'; const i = findNearest(e); if (i >= 0) navigate(`variant/${ids[i]}`); };
+  canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// Schema v2: variant JSON has flat disruption/effect/gt dicts + nP/nB/nV counts.
+// JS joins with globalData.heads for grouping, globalData.display for names.
+
+// ── Variant: rendering (presentation) ────────────────────────────────
+function loadVariant(variantId) {
+  searchResults.classList.remove('visible');
+  tooltip.style.display = 'none';
+  searchInput.value = variantId;
+  Promise.all([
+    fetch(`variants/${safeVariantId(variantId)}.json`).then(r => { if (!r.ok) throw new Error(); return r.json(); }),
+    globalReady,
+  ]).then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })
+    .catch(() => viewTransition(() => {
+      content.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--text-muted)">
+        <div style="font-size:16px;font-weight:600;margin-bottom:4px">Variant not found</div>
+        <div style="font-size:13px;font-family:monospace">${variantId}</div></div>`;
+    }));
+}
+
+function renderVariant(v) {
+  const stars = v.stars > 0 ? ' ' + '\u2605'.repeat(v.stars) + '\u2606'.repeat(Math.max(0, 4 - v.stars)) : '';
+  const aa = v.substitution ? ` (${v.substitution})` : '';
+
+  // Format HGVS and position context
+  const hgvsp = v.hgvsp ? v.hgvsp.split(':').pop() : null;
+  const hgvsc = v.hgvsc ? v.hgvsc.split(':').pop() : null;
+  const posFormatted = v.pos != null ? v.pos.toLocaleString() : '?';
+  const exonStr = v.exon ? `exon ${v.exon}` : '';
+  const domainStr = v.domains ? v.domains.split(';').map(d => d.split(':').pop()).slice(0, 2).join(', ') : '';
+  const contextParts = [humanConsequence(v.consequence), exonStr, domainStr].filter(Boolean);
+
+  // gnomAD frequency formatting
+  const af = v.gnomad;
+  const afStr = af != null && af > 0
+    ? (af < 0.0001 ? af.toExponential(1) : af.toFixed(4)) + ` (1 / ${Math.round(1/af).toLocaleString()})`
+    : af === 0 || af == null ? 'Not observed' : af.toFixed(4);
+  const afNote = af == null || af === 0 ? 'Absent from gnomAD'
+    : af > 0.05 ? 'Common (BA1)' : af > 0.01 ? 'Polymorphism (BS1)'
+    : af < 0.0001 ? 'Rare (supports PM2)' : '';
+
+  // LOEUF interpretation
+  const loeufStr = v.loeuf != null ? v.loeuf.toFixed(2) : null;
+  const loeufNote = v.loeuf != null
+    ? (v.loeuf < 0.35 ? 'highly constrained' : v.loeuf < 0.6 ? 'constrained' : v.loeuf < 1.0 ? 'tolerant' : 'unconstrained')
+    : null;
+
+  let html = `
+    <div class="card verdict">
+      <div class="verdict-info">
+        <div class="verdict-gene">${v.gene}${hgvsp ? ` <span style="font-size:16px;font-weight:400;color:var(--text-secondary)">${hgvsp}</span>` : ''}</div>
+        <div class="verdict-id" title="${v.id}">${v.chrom}:${posFormatted} ${v.ref}>${v.alt}${hgvsc ? ` &nbsp; ${hgvsc}` : ''}</div>
+        <div class="verdict-id">${contextParts.join(' \u00b7 ')}</div>
+        <div class="verdict-meta">
+          ${labelBadge(v.label)}
+          ${stars ? `<span style="color:var(--accent)">${stars}</span>` : ''}
+          ${v.disease ? ` \u00b7 ${v.disease}` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+          ${af != null ? `gnomAD: <b>${afStr}</b>` : ''}
+          ${loeufStr ? ` &nbsp;\u00b7&nbsp; LOEUF: <b>${loeufStr}</b> (${loeufNote})` : ''}
+        </div>
+        <div class="verdict-links">
+          ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/variation/${v.allele_id}/" target="_blank" rel="noopener">ClinVar</a>` : ''}
+          <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.pos}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
+          ${v.rs_id ? `<a href="https://www.ncbi.nlm.nih.gov/snp/${v.rs_id}" target="_blank" rel="noopener">dbSNP</a>` : ''}
+          <a href="https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${v.chrom}:${v.pos}" target="_blank" rel="noopener">UCSC</a>
+          ${v.swissprot ? `<a href="https://www.uniprot.org/uniprotkb/${v.swissprot.split('.')[0]}" target="_blank" rel="noopener">UniProt</a>` : `<a href="https://www.uniprot.org/uniprotkb?query=gene:${v.gene}+organism_id:9606" target="_blank" rel="noopener">UniProt</a>`}
+          ${v.gene_id ? `<a href="https://www.ensembl.org/Homo_sapiens/Gene/Summary?g=${v.gene_id}" target="_blank" rel="noopener">Ensembl</a>` : ''}
+          <a href="https://omim.org/search?search=${v.gene}" target="_blank" rel="noopener">OMIM</a>
+          <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${v.gene}" target="_blank" rel="noopener">GeneCards</a>
+        </div>
+      </div>
+      <div class="verdict-score">
+        <div class="score-label">Variant Effect Score</div>
+        <div class="number" style="color:${scoreColor(v.score)}">${v.score.toFixed(3)}</div>
+      </div>
+    </div>`;
+
+  // --- Flat lookups for predictors card ---
+  const gt = v.gt || {};
+  const effLookup = v.effect || {};
+
+  // --- Computational Predictors card ---
+  // Database values (actual tool outputs) take priority; probe predictions as fallback
+  const predictors = [
+    {name: 'CADD', key: 'cadd_c', threshold: 0.333, invert: false},
+    {name: 'AlphaMissense', key: 'alphamissense_c', threshold: 0.564, invert: false},
+    {name: 'REVEL', key: 'revel_c', threshold: 0.5, invert: false},
+    {name: 'SIFT', key: 'sift_c', threshold: 0.05, invert: true},
+    {name: 'PolyPhen-2', key: 'polyphen_c', threshold: 0.85, invert: false},
+    {name: 'EVE', key: 'eve_c', threshold: 0.5, invert: false},
+    {name: 'SpliceAI', key: 'spliceai_max_c', threshold: 0.2, invert: false},
+  ];
+  const predRows = predictors.map(p => {
+    const dbVal = gt[p.key];
+    const probeVal = effLookup[p.key];
+    const val = dbVal ?? probeVal;
+    if (val == null) return null;
+    const damaging = p.invert ? val < p.threshold : val > p.threshold;
+    return {name: p.name, value: val, source: dbVal != null ? 'database' : 'probe', call: damaging ? 'D' : 'T', color: damaging ? 'var(--negative)' : 'var(--positive)'};
+  }).filter(Boolean);
+
+  const hasProbe = predRows.some(r => r.source === 'probe');
+  if (predRows.length > 1) {
+    const nDam = predRows.filter(r => r.call === 'D').length;
+    const consensus = nDam > predRows.length / 2 ? 'deleterious' : 'benign';
+    html += `<div class="card">
+      <div class="section-title">Computational Predictors</div>
+      <div class="profile-legend">${hasProbe ? 'Database values where available, Evo2 predictions otherwise' : 'Database values from external tools'}</div>
+      ${predRows.map(r => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
+        <span style="width:120px;color:var(--text-secondary)">${r.name}</span>
+        <span style="flex:1;height:10px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(2, r.value * 100)}%;background:${barColor(r.value)};border-radius:3px"></span></span>
+        <span style="width:40px;text-align:right;font-family:monospace;font-size:11px">${r.value.toFixed(2)}</span>
+        <span style="width:16px;text-align:center;font-weight:700;font-size:11px;color:${r.color}">${r.call}</span>
+      </div>`).join('')}
+      <div style="font-size:11px;color:var(--text-muted);margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
+        Consensus: <b>${nDam}/${predRows.length}</b> ${consensus} ${nDam > predRows.length / 2 ? '(supports PP3)' : '(supports BP4)'}
+      </div>
+    </div>`;
+  }
+
+  html += `<div class="card">
+      <div class="section-title">Disruption Profile</div>
+      <div class="profile-legend">
+        <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:20px;height:10px;background:#bbb;opacity:.5;border-radius:2px;position:relative"><span style="position:absolute;top:2px;left:0;width:14px;height:6px;background:#bbb;border-radius:1px"></span></span> ref / var</span>
+        <span style="color:var(--negative)">\u2212 disrupted</span>
+        <span style="color:var(--positive)">+ gained</span>
+        <span><span style="display:inline-block;width:2px;height:10px;background:#333;vertical-align:middle;margin-right:2px"></span> database</span>
+      </div>`;
+
+  for (const [gname, keys] of Object.entries(globalData.heads.disruption)) {
+    const items = keys
+      .filter(k => v.disruption?.[k])
+      .map(k => ({key: k, ref: v.disruption[k][0], var: v.disruption[k][1], gt: v.gt?.[k]}))
+      .sort((a, b) => Math.abs(b.var - b.ref) - Math.abs(a.var - a.ref));
+    if (items.length) html += renderGroup(gname, items, disruptionRow, 'ref');
+  }
+
+  html += `</div>
+    <div class="card">
+      <div class="section-title">Variant Effects</div>
+      <div class="profile-legend">How this mutation changes biological and clinical features</div>`;
+
+  for (const [gname, keys] of Object.entries(globalData.heads.effect)) {
+    const items = keys
+      .filter(k => v.effect?.[k] != null)
+      .map(k => ({key: k, val: v.effect[k], gt: v.gt?.[k]}))
+      .sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
+    if (items.length) html += renderGroup(gname, items, effectRow, 'eff');
+  }
+
+  html += '</div>';
+
+  if (v.attribution?.length) {
+    html += `<div class="card"><div class="section-title">Why This Prediction</div>
+      <div class="profile-legend">Top biological programs explaining the pathogenicity score</div>`;
+    for (const prog of v.attribution) {
+      const sign = prog.contribution > 0;
+      const color = sign ? 'var(--negative)' : 'var(--positive)';
+      const label = sign ? 'pathogenic' : 'protective';
+      const barW = Math.min(Math.abs(prog.contribution) / (Math.abs(v.attribution[0]?.contribution || 1)) * 100, 100);
+      html += `<div class="attr-program" style="margin:8px 0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <div style="width:${barW}%;min-width:4px;height:6px;background:${color};border-radius:3px;transition:width 0.3s"></div>
+          <span style="font-size:12px;color:${color};font-weight:600;white-space:nowrap">${prog.contribution > 0 ? '+' : ''}${prog.contribution.toFixed(3)} ${label}</span>
+          ${prog.label ? `<span style="font-size:11px;color:var(--text-muted);margin-left:4px">${prog.label}</span>` : ''}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:4px">`;
+      for (const h of prog.heads) {
+        const hColor = h.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
+        const dname = globalData?.display?.[h.name] || h.name.replace(/_/g, ' ');
+        const kindBadge = h.kind === 'disruption' ? '<span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px;margin-left:2px">\u0394</span>' : '';
+        html += `<span class="attr-head" style="font-size:11px;background:color-mix(in srgb, ${hColor} 8%, var(--bg));border:1px solid color-mix(in srgb, ${hColor} 20%, transparent);border-radius:6px;padding:2px 8px;white-space:nowrap" title="${h.name}: score=${h.score}, contribution=${h.contribution}">${dname}${kindBadge} <b style="color:${hColor}">${h.contribution > 0 ? '+' : ''}${h.contribution.toFixed(3)}</b></span>`;
+      }
+      html += `</div></div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="card"><div class="section-title">Nearest Neighbors</div>`;
+  if (v.label === 'VUS' && v.neighbors.length) {
+    const ch = v.nP > v.nB * 2 ? 'predominantly pathogenic' : v.nB > v.nP * 2 ? 'predominantly benign' : 'mixed';
+    const cc = ch.includes('pathogenic') ? 'var(--negative)' : ch.includes('benign') ? '#27a' : 'var(--text-secondary)';
+    html += `<div class="vus-callout">This variant is <b>unclassified (VUS)</b>. Its nearest neighbors suggest <b style="color:${cc}">${ch}</b> character.</div>`;
+  }
+  html += `<div class="neighbor-summary"><strong>${v.nP}</strong> pathogenic, <strong>${v.nB}</strong> benign, <strong>${v.nV}</strong> VUS among ${v.neighbors.length} closest</div>
+    <table><tr><th>Variant</th><th>Gene</th><th>Consequence</th><th>Label</th><th>Score</th><th>Sim</th></tr>`;
+  for (const nb of v.neighbors) {
+    const cls = nb.label.includes('pathogenic') ? 'pathogenic' : nb.label.includes('benign') ? 'benign' : '';
+    html += `<tr class="${cls}" style="cursor:pointer" onclick="navigate('variant/${nb.id}')">
+      <td class="mono" title="${nb.id}">${truncate(nb.id)}</td><td>${nb.gene}</td><td>${humanConsequence(nb.consequence)}</td>
+      <td>${labelBadge(nb.label)}</td><td class="mono">${nb.score.toFixed(3)}</td>
+      <td class="mono">${nb.similarity.toFixed(3)}</td></tr>`;
+  }
+  html += '</table></div>';
+  html += `<div class="card"><div class="section-title">Score Distribution</div>
+    <div class="distribution-container"><canvas id="dist-chart"></canvas></div></div>`;
+
+  // --- Population Frequency card (bottom, detail-level) ---
+  const hasFreq = v.gnomad_pop && Object.values(v.gnomad_pop).some(f => f != null && f > 0);
+  if (hasFreq) {
+    const pops = [['afr','African'],['amr','American'],['asj','Ashkenazi'],['eas','East Asian'],['fin','Finnish'],['nfe','European'],['sas','South Asian']];
+    const maxAF = Math.max(...pops.map(([k]) => v.gnomad_pop[k] || 0), 1e-6);
+    html += `<div class="card">
+      <div class="section-title">Population Frequency</div>
+      <div style="font-size:13px;margin-bottom:10px">gnomAD exome: <b>${afStr}</b>${afNote ? ` &mdash; <span style="color:var(--text-muted)">${afNote}</span>` : ''}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;font-size:12px">
+        ${pops.map(([k, label]) => {
+          const f = v.gnomad_pop[k];
+          const w = f && f > 0 ? Math.max(2, (f / maxAF) * 100) : 0;
+          const fStr = f && f > 0 ? (f < 0.0001 ? f.toExponential(1) : f.toFixed(5)) : '0';
+          return `<div style="display:flex;align-items:center;gap:6px">
+            <span style="width:70px;color:var(--text-secondary);flex-shrink:0">${label}</span>
+            <span style="flex:1;height:8px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:var(--accent);border-radius:3px"></span></span>
+            <span style="width:60px;text-align:right;font-family:monospace;font-size:10px;color:var(--text-muted)">${fStr}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  content.innerHTML = html;
+  renderDistChart(v);
+
+  // Lazy interpretation card — only inserted if it exists
+  fetch(`interpretations/${safeVariantId(v.id)}.json`)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+    .then(interp => {
+      if (!interp || interp.status !== 'ok') return;
+      const cc = interp.confidence === 'high' ? 'conf-high' : interp.confidence === 'medium' ? 'conf-medium' : 'conf-low';
+      content.querySelector('.verdict')?.insertAdjacentHTML('afterend',
+        `<div class="card interp-card">
+          <div class="section-title">AI Interpretation <span class="interp-confidence ${cc}">${interp.confidence} confidence</span></div>
+          <div class="interp-summary">${interp.summary}</div>
+          <div class="interp-mechanism"><b>Mechanism:</b> ${interp.mechanism}</div>
+          <div class="section-title" style="margin-top:12px;font-size:11px">Key Evidence</div>
+          <ul class="interp-evidence">${interp.key_evidence.map(e => `<li>${e}</li>`).join('')}</ul>
+        </div>`);
+    }).catch(() => {});
+}
+
+function renderDistChart(v) {
+  if (!distributionData) return;
+  const el = document.getElementById('dist-chart'); if (!el) return;
+  const bins = distributionData.bins;
+  if (distChart) distChart.destroy();
+  const mb = Math.min(bins - 1, Math.max(0, Math.floor(v.score * bins)));
+  distChart = new Chart(el.getContext('2d'), {
+    type: 'bar',
+    data: { labels: Array.from({length: bins}, (_, i) => (i / bins).toFixed(2)),
+      datasets: [
+        { label: 'Benign', data: distributionData.benign, backgroundColor: 'rgba(34,119,170,0.4)', borderWidth: 0 },
+        { label: 'Pathogenic', data: distributionData.pathogenic, backgroundColor: 'rgba(204,85,85,0.4)', borderWidth: 0 },
+      ] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      scales: { x: { ticks: { maxTicksLimit: 10 } }, y: {} },
+      plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } } },
+    plugins: [{ id: 'dm', afterDraw(chart) {
+      const meta = chart.getDatasetMeta(0); if (!meta.data[mb]) return;
+      const c = chart.ctx; c.save(); c.beginPath();
+      c.moveTo(meta.data[mb].x, chart.chartArea.top); c.lineTo(meta.data[mb].x, chart.chartArea.bottom);
+      c.strokeStyle = '#333'; c.lineWidth = 2.5; c.stroke();
+      c.font = '11px sans-serif'; c.fillStyle = '#333';
+      const tx = meta.data[mb].x, lbl = 'This variant', tw = c.measureText(lbl).width;
+      c.fillText(lbl, tx + tw + 8 > chart.chartArea.right ? tx - tw - 4 : tx + 4, chart.chartArea.top + 12);
+      c.restore();
+    }}],
+  });
+}
+</script>
+</body>
+</html>
