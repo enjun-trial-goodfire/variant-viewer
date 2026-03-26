@@ -611,9 +611,9 @@ function renderVariant(v) {
         </div>
         <div class="verdict-links">
           ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/?term=${v.allele_id}[alleleid]" target="_blank" rel="noopener">ClinVar</a>` : ''}
-          <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.pos}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
+          <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.pos + 1}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
           ${v.rs_id ? `<a href="https://www.ncbi.nlm.nih.gov/snp/${v.rs_id}" target="_blank" rel="noopener">dbSNP</a>` : ''}
-          <a href="https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${v.chrom}:${v.pos}" target="_blank" rel="noopener">UCSC</a>
+          <a href="https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${v.chrom}:${v.pos + 1}" target="_blank" rel="noopener">UCSC</a>
           ${v.swissprot ? `<a href="https://www.uniprot.org/uniprotkb/${v.swissprot.split('.')[0]}" target="_blank" rel="noopener">UniProt</a>` : `<a href="https://www.uniprot.org/uniprotkb?query=gene:${v.gene}+organism_id:9606" target="_blank" rel="noopener">UniProt</a>`}
           ${v.gene_id ? `<a href="https://www.ensembl.org/Homo_sapiens/Gene/Summary?g=${v.gene_id}" target="_blank" rel="noopener">Ensembl</a>` : ''}
           <a href="https://omim.org/search?search=${v.gene}" target="_blank" rel="noopener">OMIM</a>
