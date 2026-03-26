@@ -610,7 +610,7 @@ function renderVariant(v) {
           ${loeufStr ? ` &nbsp;\u00b7&nbsp; LOEUF: <b>${loeufStr}</b> (${loeufNote})` : ''}
         </div>
         <div class="verdict-links">
-          ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/variation/${v.allele_id}/" target="_blank" rel="noopener">ClinVar</a>` : ''}
+          ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/?term=${v.allele_id}[alleleid]" target="_blank" rel="noopener">ClinVar</a>` : ''}
           <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.pos}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
           ${v.rs_id ? `<a href="https://www.ncbi.nlm.nih.gov/snp/${v.rs_id}" target="_blank" rel="noopener">dbSNP</a>` : ''}
           <a href="https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${v.chrom}:${v.pos}" target="_blank" rel="noopener">UCSC</a>
