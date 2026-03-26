@@ -39,6 +39,14 @@ from goodfire_core.storage import ActivationDataset, FilesystemStorage
 from src.datasets import clinvar
 from src.datasets.clinvar.main import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
 
+_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+def _vcf_alleles(ref: str, alt: str, strand: str) -> tuple[str, str]:
+    """Convert gene-strand alleles to VCF forward-strand alleles."""
+    if strand == "-":
+        return ref.translate(_COMPLEMENT), alt.translate(_COMPLEMENT)
+    return ref, alt
+
 # ── Constants ────────────────────────────────────────────────────────────
 ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
@@ -196,6 +204,13 @@ def main() -> None:
         scores_v.join(meta_v, on="variant_id", how="left").with_columns(
             pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars")),
     ], how="diagonal")
+
+    # ref/alt in the raw ClinVar source are already VCF forward-strand alleles
+    # (ref matches FASTA at 0-based pos). No strand complementing needed.
+    # Only need 0-based → 1-based position conversion for external links.
+    df = df.with_columns(
+        (pl.col("pos") + 1).alias("vcf_pos"),  # 0-based → 1-based
+    )
 
     df = df.with_columns(
         pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
@@ -367,7 +382,7 @@ def main() -> None:
     _t("Writing variant JSONs...")
     meta_fields = (
         "variant_id", "gene_name", "chrom", "pos", "ref", "alt",
-        "gene_strand",
+        "vcf_pos", "gene_strand",
         "consequence", "substitution", "label", "clinical_significance",
         "stars", "disease_name", "score_pathogenic", "rs_id", "allele_id", "gene_id",
     )
@@ -421,6 +436,7 @@ def main() -> None:
             "gene": col_data["gene_name"][i],
             "chrom": col_data["chrom"][i], "pos": col_data["pos"][i],
             "ref": col_data["ref"][i], "alt": col_data["alt"][i],
+            "vcf_pos": col_data["vcf_pos"][i],
             "gene_strand": col_data["gene_strand"][i],
             "consequence": col_data["consequence"][i],
             "substitution": col_data["substitution"][i],
