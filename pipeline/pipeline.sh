@@ -28,21 +28,21 @@ echo ""
 
 # ── Step 1: Extract (3-view embeddings + scores) ─────────────────────
 echo "Step 1: Extract..."
-EXT_L=$(sbatch --parsable --array=0-7 scripts/extract.sh --probe "$PROBE" --activations "$ACTS")
+EXT_L=$(sbatch --parsable --array=0-7 pipeline/extract.sh --probe "$PROBE" --activations "$ACTS")
 echo "  Labeled extract: ${EXT_L}"
 
 if [ -z "$LABELED_ONLY" ]; then
-    EXT_V=$(sbatch --parsable --array=0-7 scripts/extract.sh --probe "$PROBE" --activations "$VUS")
+    EXT_V=$(sbatch --parsable --array=0-7 pipeline/extract.sh --probe "$PROBE" --activations "$VUS")
     echo "  VUS extract: ${EXT_V}"
 fi
 
 # ── Step 2: Finalize (merge shards + index embeddings) ───────────────
 echo "Step 2: Finalize..."
-FIN_L=$(sbatch --parsable --dependency=afterok:${EXT_L} scripts/finalize_embed.sh "$ACTS/${PROBE_NAME}")
+FIN_L=$(sbatch --parsable --dependency=afterok:${EXT_L} pipeline/finalize.sh "$ACTS/${PROBE_NAME}")
 echo "  Labeled finalize: ${FIN_L} (after ${EXT_L})"
 
 if [ -z "$LABELED_ONLY" ]; then
-    FIN_V=$(sbatch --parsable --dependency=afterok:${EXT_V} scripts/finalize_embed.sh "$VUS/${PROBE_NAME}")
+    FIN_V=$(sbatch --parsable --dependency=afterok:${EXT_V} pipeline/finalize.sh "$VUS/${PROBE_NAME}")
     echo "  VUS finalize: ${FIN_V} (after ${EXT_V})"
     WAIT_FOR="${FIN_L}:${FIN_V}"
 else

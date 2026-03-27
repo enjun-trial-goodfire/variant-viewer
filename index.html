@@ -674,54 +674,27 @@ function renderVariant(v) {
 
   // --- Score Attribution (above predictors) ---
   const attr = v.attribution;
-  if (attr?.effect?.length || attr?.disruption?.length) {
-    const cColor = c => c > 0 ? '#c55' : '#27a';
-    const allItems = [...attr.effect, ...attr.disruption];
-    const maxC = allItems.reduce((m, h) => Math.max(m, Math.abs(h.contribution)), 0.01);
-    const n_shown = allItems.length;
-    const featureTotal = attr.logit != null ? attr.logit - (attr.intercept || 0) : null;
-    const shown_sum = allItems.reduce((s, h) => s + h.contribution, 0);
-    const other = featureTotal != null ? featureTotal - shown_sum : null;
-
-    function contribRow(item) {
-      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-      const c = item.contribution;
-      const barW = Math.abs(c) / maxC * 100;
-      const pct = featureTotal ? Math.abs(c / featureTotal * 100).toFixed(0) : '';
-      return `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${item.score},this,null)">
-        <div class="profile-label">${name}</div>
-        <div class="profile-bar-container">
-          <div style="width:${barW}%;height:100%;background:${cColor(c)};border-radius:3px;opacity:0.65"></div>
-        </div>
-        <div style="width:45px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:${cColor(c)};flex-shrink:0">${pct}%</div>
-      </div>`;
-    }
+  const attrHeads = attr?.heads || [...(attr?.effect || []), ...(attr?.disruption || [])];
+  if (attrHeads.length) {
+    const maxC = attrHeads.reduce((m, h) => Math.max(m, h.coefficient || Math.abs(h.contribution || 0)), 0.01);
 
     html += `<div class="card"><div class="section-title">Score Attribution</div>
       <div class="profile-legend">
-        Feature contributions to pathogenicity: <span style="color:#c55">pathogenic</span>, <span style="color:#27a">protective</span>
+        Biological features explaining the pathogenicity prediction${attr.explained != null ? ` (top ${attrHeads.length} explain ${(attr.explained * 100).toFixed(0)}% of signal)` : ''}
       </div>`;
 
-    if (attr.effect?.length) {
-      const sorted = [...attr.effect].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-      html += `<div class="profile-group"><div class="profile-group-title">Predicted properties</div>`;
-      html += sorted.map(contribRow).join('');
-      html += `</div>`;
-    }
-
-    if (attr.disruption?.length) {
-      const sorted = [...attr.disruption].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-      html += `<div class="profile-group"><div class="profile-group-title">Mutation impact</div>`;
-      html += sorted.map(contribRow).join('');
-      html += `</div>`;
-    }
-
-    // Summary line
-    if (featureTotal != null) {
-      const otherPct = Math.abs(other / featureTotal * 100).toFixed(0);
-      html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0 0;border-top:1px solid var(--border);display:flex;gap:16px">
-        <span>Other ${attr.n_heads - n_shown} heads: <span style="color:${cColor(other)}">${otherPct}%</span></span>
-        <span>Baseline: <span style="color:${cColor(attr.intercept)}">${Math.abs(attr.intercept / attr.logit * 100).toFixed(0)}%</span></span>
+    for (const item of attrHeads) {
+      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+      const c = item.coefficient ?? item.contribution ?? 0;
+      const barW = c / maxC * 100;
+      const pct = (c * 100).toFixed(0);
+      const kindBadge = item.kind === 'disruption' ? ' <span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px">\u0394</span>' : '';
+      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${c},this,null)">
+        <div class="profile-label">${name}${kindBadge}</div>
+        <div class="profile-bar-container">
+          <div style="width:${barW}%;height:100%;background:var(--accent);border-radius:3px;opacity:0.65"></div>
+        </div>
+        <div style="width:40px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:var(--text-secondary);flex-shrink:0">${pct}%</div>
       </div>`;
     }
     html += `</div>`;

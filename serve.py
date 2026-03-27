@@ -86,7 +86,7 @@ def _safe_vid_to_filename(vid: str) -> str:
     h = 0xCBF29CE484222325
     for b in vid.encode():
         h = ((h ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return f"{s[:100]}_{h:016x}"
+    return f"{s[:60]}_{h:016x}"
 
 
 def build_prompt(v: dict) -> str:

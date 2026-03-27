@@ -6,3 +6,4 @@ uv.lock
 *.feather
 *.safetensors
 data/
+logs/

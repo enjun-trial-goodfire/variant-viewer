@@ -34,14 +34,6 @@ from umap import UMAP
 
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 
-_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
-
-def _vcf_alleles(ref: str, alt: str, strand: str) -> tuple[str, str]:
-    """Convert gene-strand alleles to VCF forward-strand alleles."""
-    if strand == "-":
-        return ref.translate(_COMPLEMENT), alt.translate(_COMPLEMENT)
-    return ref, alt
-
 # ── Constants ────────────────────────────────────────────────────────────
 MAYO_DATA = Path(__file__).parent.parent / "data"
 ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
