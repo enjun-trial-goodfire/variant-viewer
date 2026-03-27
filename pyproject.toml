@@ -18,7 +18,6 @@ dependencies = [
     "loguru>=0.7",
     "tqdm>=4.66",
     "goodfire-core>=0.3.0",
-    "obonet>=1.1.1",
 ]
 
 [project.optional-dependencies]
