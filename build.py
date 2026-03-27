@@ -39,6 +39,14 @@ from goodfire_core.storage import ActivationDataset, FilesystemStorage
 from src.datasets import clinvar
 from src.datasets.clinvar.main import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
 
+_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+def _vcf_alleles(ref: str, alt: str, strand: str) -> tuple[str, str]:
+    """Convert gene-strand alleles to VCF forward-strand alleles."""
+    if strand == "-":
+        return ref.translate(_COMPLEMENT), alt.translate(_COMPLEMENT)
+    return ref, alt
+
 # ── Constants ────────────────────────────────────────────────────────────
 ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
@@ -185,17 +193,24 @@ def main() -> None:
     meta_l = clinvar.metadata("deconfounded-full").select(
         "variant_id", "label", "consequence", "gene_name",
         "clinical_significance", "stars", "disease_name",
-        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id")
+        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
     meta_v = clinvar.metadata("vus").select(
         "variant_id", "consequence", "gene_name",
         "clinical_significance", "disease_name",
-        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id")
+        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
 
     df = pl.concat([
         scores_l.join(meta_l, on="variant_id", how="left").with_columns(pl.col("stars").cast(pl.Int32)),
         scores_v.join(meta_v, on="variant_id", how="left").with_columns(
             pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars")),
     ], how="diagonal")
+
+    # ref/alt in the raw ClinVar source are already VCF forward-strand alleles
+    # (ref matches FASTA at 0-based pos). No strand complementing needed.
+    # Only need 0-based → 1-based position conversion for external links.
+    df = df.with_columns(
+        (pl.col("pos") + 1).alias("vcf_pos"),  # 0-based → 1-based
+    )
 
     df = df.with_columns(
         pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
@@ -351,7 +366,7 @@ def main() -> None:
     attribution_path = LABELED / PROBE / "attribution.json"
     if attribution_path.exists():
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df)
+        attr_df = attr_model.attribute(df, n_specific=10)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:
@@ -366,9 +381,10 @@ def main() -> None:
     # ── Variant JSONs ────────────────────────────────────────────────────
     _t("Writing variant JSONs...")
     meta_fields = (
-        "variant_id", "gene_name", "chrom", "pos", "ref", "alt", "consequence",
-        "substitution", "label", "clinical_significance", "stars", "disease_name",
-        "score_pathogenic", "rs_id", "allele_id", "gene_id",
+        "variant_id", "gene_name", "chrom", "pos", "ref", "alt",
+        "vcf_pos", "gene_strand",
+        "consequence", "substitution", "label", "clinical_significance",
+        "stars", "disease_name", "score_pathogenic", "rs_id", "allele_id", "gene_id",
     )
     vep_fields = [c for c in VEP_COLS if c != "variant_id" and c in df.columns]
     all_cols = [c for c in (*meta_fields, *vep_fields, *ref_cols, *var_cols, *eff_cols, *gt_cols) if c in df.columns]
@@ -420,6 +436,8 @@ def main() -> None:
             "gene": col_data["gene_name"][i],
             "chrom": col_data["chrom"][i], "pos": col_data["pos"][i],
             "ref": col_data["ref"][i], "alt": col_data["alt"][i],
+            "vcf_pos": col_data["vcf_pos"][i],
+            "gene_strand": col_data["gene_strand"][i],
             "consequence": col_data["consequence"][i],
             "substitution": col_data["substitution"][i],
             "label": col_data["label"][i],

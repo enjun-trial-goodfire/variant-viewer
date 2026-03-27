@@ -18,10 +18,18 @@ dependencies = [
     "loguru>=0.7",
     "tqdm>=4.66",
     "goodfire-core",
+    "obonet>=1.1.1",
 ]
 
 [project.optional-dependencies]
 interpret = ["anthropic"]
+serve = ["starlette>=0.45", "uvicorn[standard]", "anthropic"]
+
+[tool.setuptools]
+packages = []
 
 [tool.ruff]
 line-length = 120
+
+[tool.uv.sources]
+goodfire-core = { path = "../goodfire-core", editable = true }
