@@ -84,6 +84,7 @@ _DISPLAY_OVERRIDES: dict[str, str] = {
     "mutpred_c": "MutPred", "clinpred_c": "ClinPred", "deogen2_c": "DEOGEN2",
     "bayesdel_c": "BayesDel", "remm_c": "ReMM", "regulomedb_c": "RegulomeDB",
     "phylop_c": "PhyloP", "phastcons_c": "PhastCons", "gerp_c": "GERP",
+    "phylop_100way": "PhyloP 100-way", "phastcons_100way": "PhastCons 100-way",
     "blosum62_c": "BLOSUM62", "grantham_c": "Grantham",
     "hydrophobicity_c": "Hydrophobicity", "volume_c": "Volume", "mw_c": "Mol. Weight",
     "loeuf_c": "LOEUF",
@@ -93,6 +94,24 @@ _DISPLAY_OVERRIDES: dict[str, str] = {
     "splice_disrupting": "Splice Disrupting", "charge_altering": "Charge Altering",
     "pathogenic": "Pathogenicity", "consequence": "Consequence", "impact": "Impact",
     "aa_swap": "AA Substitution",
+    # AlphaFold structure features (avoid confusion with splicing)
+    "psi": "AlphaFold Psi Angle", "phi": "AlphaFold Phi Angle",
+    "plddt": "AlphaFold Confidence (pLDDT)", "rsa": "Relative Solvent Accessibility",
+    "sasa": "Solvent Accessible Surface Area",
+    "secondary_structure_H": "Alpha Helix", "secondary_structure_E": "Beta Strand",
+    "secondary_structure_C": "Coil/Loop",
+    "is_disordered": "Intrinsically Disordered", "is_buried": "Buried Residue",
+    "n_contacts": "Residue Contacts", "residue_number": "Residue Number",
+    "gc_content": "GC Content", "cpg_density": "CpG Density",
+    "recomb_rate": "Recombination Rate", "trinuc_mutation_rate": "Trinucleotide Mutation Rate",
+    "codon_position": "Codon Position", "syn_potential": "Synonymous Potential",
+    "exon_number": "Exon Number", "n_transcripts_with_exon": "Transcripts with Exon",
+    "disorder_content_fraction": "Disorder Content",
+    "ppi_partner_count": "PPI Partners", "is_ppi_interface": "PPI Interface",
+    "is_splice_donor": "Splice Donor Site", "is_splice_acceptor": "Splice Acceptor Site",
+    "is_branchpoint_region": "Branchpoint Region", "is_polypyrimidine_tract": "Polypyrimidine Tract",
+    "is_exon_to_intron": "Exon-Intron Boundary", "is_intron_to_exon": "Intron-Exon Boundary",
+    "cadd_wg_c": "CADD (whole-genome)",
 }
 
 _ACRONYMS = {"chipseq", "atacseq", "chromhmm", "fstack", "ptm", "elm"}

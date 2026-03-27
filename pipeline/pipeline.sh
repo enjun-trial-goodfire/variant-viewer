@@ -73,20 +73,27 @@ gt = pl.read_ipc('data/clinvar/deconfounded-full/annotations_v9.feather')
 meta = pl.read_ipc('data/clinvar/deconfounded-full/metadata.feather').select('variant_id', 'label')
 df = scores.join(gt, on='variant_id', how='left').join(meta, on='variant_id', how='left').filter(pl.col('variant_id').is_in(list(test_ids)))
 
+def eval_head(pred, truth):
+    valid = ~(np.isnan(pred) | np.isnan(truth))
+    if valid.sum() < 20: return None
+    p, t = pred[valid], truth[valid]
+    if len(np.unique(t)) == 2:
+        return {'kind': 'binary', 'auc': round(float(roc_auc_score(t, p)), 4), 'n': int(valid.sum())}
+    r, _ = pearsonr(p, t)
+    if np.isnan(r): return None
+    return {'kind': 'continuous', 'correlation': round(float(r), 4), 'n': int(valid.sum())}
+
 eval_results = {}
 for col in [c for c in df.columns if c.startswith('score_') and c != 'score_pathogenic']:
     head = col[6:]
     if head not in gt.columns: continue
-    s = df[col].to_numpy().astype(np.float64)
-    g = df[head].to_numpy().astype(np.float64)
-    valid = ~(np.isnan(s) | np.isnan(g))
-    if valid.sum() < 20: continue
-    unique = np.unique(g[valid])
-    if len(unique) == 2:
-        eval_results[head] = {'kind': 'binary', 'auc': round(float(roc_auc_score(g[valid], s[valid])), 4), 'n': int(valid.sum())}
-    else:
-        r, _ = pearsonr(s[valid], g[valid])
-        eval_results[head] = {'kind': 'continuous', 'correlation': round(float(r), 4), 'n': int(valid.sum())}
+    r = eval_head(df[col].to_numpy().astype(np.float64), df[head].to_numpy().astype(np.float64))
+    if r: eval_results[head] = r
+for col in [c for c in df.columns if c.startswith('ref_score_')]:
+    head = col[10:]
+    if head not in gt.columns or head in eval_results: continue
+    r = eval_head(df[col].to_numpy().astype(np.float64), df[head].to_numpy().astype(np.float64))
+    if r: eval_results[head] = r
 
 df_path = df.filter(pl.col('label').is_in(['benign', 'pathogenic']))
 y_true = (df_path['label'] == 'pathogenic').to_numpy().astype(int)

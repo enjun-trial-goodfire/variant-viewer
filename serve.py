@@ -92,13 +92,19 @@ def _safe_vid_to_filename(vid: str) -> str:
 def build_prompt(v: dict) -> str:
     """Build the interpretation prompt from a per-variant JSON."""
     score = v["score"]
-    lines = [f"## {v['gene']} — {v['id']}", v.get('consequence', '?')]
-    if v.get('hgvsp') or v.get('hgvsc'):
+    csq = v.get('consequence', '?')
+    sub = v.get('substitution')
+    lines = [f"## {v['gene']} — {v['id']}", f"Consequence: {csq}" + (f" ({sub})" if sub else "")]
+    # Only show HGVS if it's consistent with the consequence (avoid non-canonical transcript confusion)
+    hgvsp = v.get('hgvsp', '')
+    hgvsc = v.get('hgvsc', '')
+    hgvs_consistent = not (('=' in hgvsp and csq == 'missense_variant') or ('=' not in hgvsp and hgvsp and csq == 'synonymous_variant'))
+    if hgvs_consistent and (hgvsp or hgvsc):
         parts = []
-        if v.get('hgvsp'):
-            parts.append(f"Protein: {v['hgvsp']}")
-        if v.get('hgvsc'):
-            parts.append(f"Coding: {v['hgvsc']}")
+        if hgvsp:
+            parts.append(f"Protein: {hgvsp}")
+        if hgvsc:
+            parts.append(f"Coding: {hgvsc}")
         lines.append("  |  ".join(parts))
 
     # Label context
@@ -116,69 +122,31 @@ def build_prompt(v: dict) -> str:
         lines.append(cal)
     lines.append("")
 
-    # Top attribution heads (ridge regression coefficients × feature values)
+    # Attribution heads (ridge regression: which features drive the pathogenicity prediction)
     attr = v.get("attribution") or {}
     attr_heads = attr.get("heads", [])
     disruption = v.get("disruption", {})
     effect = v.get("effect", {})
     gt = v.get("gt", {})
 
-    if attr_heads:
-        # Sort by |coefficient| and take top 20
-        top = sorted(attr_heads, key=lambda h: abs(h.get("coefficient", 0)), reverse=True)[:20]
-        lines.append("### Top Attribution Heads (features most driving the pathogenicity prediction)")
-        lines.append("| Rank | Feature | Type | Coefficient | Value | Ref→Var (Δ) | Database |")
-        lines.append("|------|---------|------|------------|-------|-------------|----------|")
-
-        for i, h in enumerate(top, 1):
-            name = h["name"]
-            dname = display_name(name)
-            kind = h.get("kind", "?")
-            coeff = h.get("coefficient", 0)
-
-            # Get value and ref/var context
-            val_str = "—"
-            delta_str = "—"
+    top = sorted(attr_heads, key=lambda h: abs(h.get("coefficient", 0)), reverse=True)[:15]
+    if top:
+        lines.append("### Attribution (features driving the prediction, ranked by importance)")
+        lines.append("| Feature | Type | Weight | Value | Ref→Var (Δ) | Database |")
+        lines.append("|---------|------|--------|-------|-------------|----------|")
+        for h in top:
+            name, kind, coeff = h["name"], h.get("kind", "?"), h.get("coefficient", 0)
+            val_str, delta_str, gt_str = "—", "—", gt.get(name, "—")
+            if isinstance(gt_str, float):
+                gt_str = f"{gt_str:.3f}"
             if kind == "disruption" and name in disruption:
                 ref_val, var_val = disruption[name]
-                delta = var_val - ref_val
                 val_str = f"{var_val:.3f}"
-                delta_str = f"{ref_val:.3f}→{var_val:.3f} (Δ={delta:+.3f})"
+                delta_str = f"{ref_val:.3f}→{var_val:.3f} (Δ={var_val - ref_val:+.3f})"
             elif kind == "effect" and name in effect:
                 val_str = f"{effect[name]:.3f}"
-
-            gt_str = f"{gt[name]:.3f}" if name in gt else "—"
-            direction = "↑path" if coeff > 0 else "↓benign"
-            lines.append(f"| {i} | {dname} | {kind} | {coeff:+.4f} ({direction}) | {val_str} | {delta_str} | {gt_str} |")
+            lines.append(f"| {display_name(name)} | {kind} | {coeff:+.4f} | {val_str} | {delta_str} | {gt_str} |")
         lines.append("")
-    else:
-        # No attribution model — fall back to top disruptions by |delta|
-        top_disruptions = sorted(
-            ((name, vals) for name, vals in disruption.items() if isinstance(vals, list) and len(vals) == 2),
-            key=lambda x: abs(x[1][1] - x[1][0]), reverse=True,
-        )[:15]
-        if top_disruptions:
-            lines.append("### Top Disrupted Features (largest ref→var changes)")
-            lines.append("| Feature | Reference | Variant | Delta | Database |")
-            lines.append("|---------|-----------|---------|-------|----------|")
-            for name, (ref_val, var_val) in top_disruptions:
-                delta = var_val - ref_val
-                gt_str = f"{gt[name]:.3f}" if name in gt else "—"
-                lines.append(f"| {display_name(name)} | {ref_val:.3f} | {var_val:.3f} | {delta:+.3f} | {gt_str} |")
-            lines.append("")
-
-        top_effects = sorted(
-            ((name, val) for name, val in effect.items() if name != "pathogenic"),
-            key=lambda x: abs(x[1] - 0.5), reverse=True,
-        )[:10]
-        if top_effects:
-            lines.append("### Top Effect Predictions")
-            lines.append("| Feature | Predicted | Database |")
-            lines.append("|---------|-----------|----------|")
-            for name, val in top_effects:
-                gt_str = f"{gt[name]:.3f}" if name in gt else "—"
-                lines.append(f"| {display_name(name)} | {val:.3f} | {gt_str} |")
-            lines.append("")
 
     # Neighbors
     neighbors = v.get("neighbors", [])
@@ -310,7 +278,7 @@ def create_app(build_dir: Path) -> Starlette:
 
     routes = [
         Route("/api/interpret/{variant_id:path}", interpret_endpoint),
-        Mount("/", app=StaticFiles(directory=str(build_dir), html=True)),
+        Mount("/", app=StaticFiles(directory=str(build_dir), html=True, follow_symlink=True)),
     ]
     return Starlette(routes=routes)
 

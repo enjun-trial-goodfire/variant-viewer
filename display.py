@@ -25,6 +25,22 @@ _DISPLAY_OVERRIDES: dict[str, str] = {
     "splice_disrupting": "Splice Disrupting", "charge_altering": "Charge Altering",
     "pathogenic": "Pathogenicity", "consequence": "Consequence", "impact": "Impact",
     "aa_swap": "AA Substitution",
+    # AlphaFold (avoid confusion with splicing)
+    "psi": "AlphaFold Psi Angle", "phi": "AlphaFold Phi Angle",
+    "plddt": "AlphaFold Confidence (pLDDT)", "rsa": "Relative Solvent Accessibility",
+    "secondary_structure_H": "Alpha Helix", "secondary_structure_E": "Beta Strand",
+    "secondary_structure_C": "Coil/Loop",
+    "is_disordered": "Intrinsically Disordered", "is_buried": "Buried Residue",
+    # Splicing
+    "is_splice_donor": "Splice Donor Site", "is_splice_acceptor": "Splice Acceptor Site",
+    "is_branchpoint_region": "Branchpoint Region", "is_polypyrimidine_tract": "Polypyrimidine Tract",
+    "is_exon_to_intron": "Exon-Intron Boundary", "is_intron_to_exon": "Intron-Exon Boundary",
+    # Genomic context
+    "phylop_100way": "PhyloP 100-way", "phastcons_100way": "PhastCons 100-way",
+    "gc_content": "GC Content", "cpg_density": "CpG Density",
+    "recomb_rate": "Recombination Rate", "codon_position": "Codon Position",
+    "exon_number": "Exon Number", "cadd_wg_c": "CADD (whole-genome)",
+    "is_ppi_interface": "PPI Interface", "ppi_partner_count": "PPI Partners",
 }
 
 _ACRONYMS = {"chipseq", "atacseq", "chromhmm", "fstack", "ptm", "elm"}

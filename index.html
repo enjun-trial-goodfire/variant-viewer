@@ -347,7 +347,7 @@ function disruptionRow(it) {
   const badge = evalBadge(it.key);
   const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d < 0 ? 'var(--negative)' : 'var(--positive)';
   const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
-  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${it.var},this,${it.gt ?? 'null'})">
+  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${d},this,${it.gt ?? 'null'})">
     <div class="profile-label">${name}${badge}</div>
     <div class="profile-bar-container">
       <div class="profile-bar-ref" style="width:${Math.max(2,it.ref*100)}%;background:${bc}"></div>
@@ -414,7 +414,10 @@ function toggleBarDetail(head, label, value, rowEl, gt) {
   }
   requestAnimationFrame(() => detail.classList.add('open'));
 
-  let summary = `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${currentVariant.consequence}.`;
+  const isDisruption = currentVariant.disruption?.[head] != null;
+  let summary = isDisruption
+    ? `<b>${label}</b>: ref\u2192var delta <b>${value > 0 ? '+' : ''}${value.toFixed(3)}</b> for this ${currentVariant.consequence}.`
+    : `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${currentVariant.consequence}.`;
   if (gt != null) {
     const err = Math.abs(value - gt);
     const cal = err < 0.05 ? 'well-calibrated' : err < 0.15 ? 'close' : err < 0.35 ? 'moderately off' : 'poorly calibrated';
@@ -685,9 +688,17 @@ function renderVariant(v) {
       const c = item.coefficient ?? item.contribution ?? 0;
       const barW = c / maxC * 100;
       const pct = (c * 100).toFixed(0);
-      const kindBadge = item.kind === 'disruption' ? ' <span style="font-size:9px;background:#e8e0d4;padding:0 4px;border-radius:3px">\u0394</span>' : '';
-      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${c},this,null)">
-        <div class="profile-label">${name}${kindBadge}</div>
+      let deltaText = '';
+      if (item.kind === 'disruption' && v.disruption?.[item.name]) {
+        const [ref, va] = v.disruption[item.name];
+        const d = va - ref;
+        const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d > 0 ? '#c55' : '#27a';
+        deltaText = `<span style="background:#f0ebe4;padding:1px 5px;border-radius:3px;color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(2)}</span>`;
+      }
+      const chartVal = (item.kind === 'disruption' && v.disruption?.[item.name]) ? v.disruption[item.name][1] - v.disruption[item.name][0] : (v.effect?.[item.name] ?? c);
+      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${chartVal},this,null)">
+        <div class="profile-label">${name}</div>
+        <div style="width:65px;flex-shrink:0;text-align:right;font-size:9px;font-weight:600;font-family:monospace;margin-right:6px">${deltaText}</div>
         <div class="profile-bar-container">
           <div style="width:${barW}%;height:100%;background:var(--accent);border-radius:3px;opacity:0.65"></div>
         </div>
@@ -696,11 +707,9 @@ function renderVariant(v) {
     }
     const shownPct = attrHeads.reduce((s, h) => s + (h.coefficient ?? Math.abs(h.contribution ?? 0)), 0) * 100;
     const otherPct = 100 - shownPct;
-    const summary = otherPct > 1
-      ? `Top ${attrHeads.length} features: <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads: <b>${otherPct.toFixed(0)}%</b>`
-      : shownPct > 100
-        ? `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> (remaining heads partially counteract)`
-        : `Top ${attrHeads.length} features: <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b>`;
+    const summary = shownPct > 100
+      ? `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads counteract <b>${Math.abs(otherPct).toFixed(0)}%</b>`
+      : `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads contribute <b>${otherPct.toFixed(0)}%</b>`;
     html += `<div style="font-size:12px;color:var(--text-secondary);padding:8px 0 0;border-top:1px solid var(--border)">${summary}</div>`;
     html += `</div>`;
   }
