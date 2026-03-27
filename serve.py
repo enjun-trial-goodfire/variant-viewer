@@ -117,7 +117,7 @@ def build_prompt(v: dict) -> str:
     lines.append("")
 
     # Top attribution heads (ridge regression coefficients × feature values)
-    attr = v.get("attribution", {})
+    attr = v.get("attribution") or {}
     attr_heads = attr.get("heads", [])
     disruption = v.get("disruption", {})
     effect = v.get("effect", {})
