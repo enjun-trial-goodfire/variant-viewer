@@ -113,48 +113,69 @@ def build_prompt(v: dict) -> str:
         lines.append(cal)
     lines.append("")
 
-    # Top 20 attribution heads
+    # Top attribution heads (ridge regression coefficients × feature values)
     attr = v.get("attribution", {})
-    baseline = attr.get("baseline", [])
-    specific = attr.get("specific", [])
-    all_heads = sorted(baseline + specific, key=lambda h: abs(h["contribution"]), reverse=True)[:20]
+    attr_heads = attr.get("heads", [])
+    disruption = v.get("disruption", {})
+    effect = v.get("effect", {})
+    gt = v.get("gt", {})
 
-    if all_heads:
-        lines.append("### Top Attribution Heads (driving the pathogenicity prediction)")
-        lines.append("| Rank | Head | Kind | Contribution | Score | Ref→Var (Δ) | Ground Truth |")
-        lines.append("|------|------|------|-------------|-------|-------------|--------------|")
+    if attr_heads:
+        # Sort by |coefficient| and take top 20
+        top = sorted(attr_heads, key=lambda h: abs(h.get("coefficient", 0)), reverse=True)[:20]
+        lines.append("### Top Attribution Heads (features most driving the pathogenicity prediction)")
+        lines.append("| Rank | Feature | Type | Coefficient | Value | Ref→Var (Δ) | Database |")
+        lines.append("|------|---------|------|------------|-------|-------------|----------|")
 
-        disruption = v.get("disruption", {})
-        effect = v.get("effect", {})
-        gt = v.get("gt", {})
-
-        for i, h in enumerate(all_heads, 1):
+        for i, h in enumerate(top, 1):
             name = h["name"]
             dname = display_name(name)
-            kind = h["kind"]
-            contrib = h["contribution"]
-            head_score = h["score"]
+            kind = h.get("kind", "?")
+            coeff = h.get("coefficient", 0)
 
-            # Get ref/var/delta for disruption heads
-            ref_var_str = "—"
+            # Get value and ref/var context
+            val_str = "—"
+            delta_str = "—"
             if kind == "disruption" and name in disruption:
                 ref_val, var_val = disruption[name]
                 delta = var_val - ref_val
-                ref_var_str = f"{ref_val:.3f}→{var_val:.3f} (Δ={delta:+.3f})"
+                val_str = f"{var_val:.3f}"
+                delta_str = f"{ref_val:.3f}→{var_val:.3f} (Δ={delta:+.3f})"
             elif kind == "effect" and name in effect:
-                ref_var_str = f"pred={effect[name]:.3f}"
+                val_str = f"{effect[name]:.3f}"
 
-            # Ground truth
-            gt_str = "—"
-            gt_val = gt.get(name)
-            if gt_val is not None:
-                gt_str = f"{gt_val:.3f}"
-
-            direction = "↑path" if contrib > 0 else "↓benign"
-            lines.append(
-                f"| {i} | {dname} | {kind} | {contrib:+.3f} ({direction}) | {head_score:.3f} | {ref_var_str} | {gt_str} |"
-            )
+            gt_str = f"{gt[name]:.3f}" if name in gt else "—"
+            direction = "↑path" if coeff > 0 else "↓benign"
+            lines.append(f"| {i} | {dname} | {kind} | {coeff:+.4f} ({direction}) | {val_str} | {delta_str} | {gt_str} |")
         lines.append("")
+    else:
+        # No attribution model — fall back to top disruptions by |delta|
+        top_disruptions = sorted(
+            ((name, vals) for name, vals in disruption.items() if isinstance(vals, list) and len(vals) == 2),
+            key=lambda x: abs(x[1][1] - x[1][0]), reverse=True,
+        )[:15]
+        if top_disruptions:
+            lines.append("### Top Disrupted Features (largest ref→var changes)")
+            lines.append("| Feature | Reference | Variant | Delta | Database |")
+            lines.append("|---------|-----------|---------|-------|----------|")
+            for name, (ref_val, var_val) in top_disruptions:
+                delta = var_val - ref_val
+                gt_str = f"{gt[name]:.3f}" if name in gt else "—"
+                lines.append(f"| {display_name(name)} | {ref_val:.3f} | {var_val:.3f} | {delta:+.3f} | {gt_str} |")
+            lines.append("")
+
+        top_effects = sorted(
+            ((name, val) for name, val in effect.items() if name != "pathogenic"),
+            key=lambda x: abs(x[1] - 0.5), reverse=True,
+        )[:10]
+        if top_effects:
+            lines.append("### Top Effect Predictions")
+            lines.append("| Feature | Predicted | Database |")
+            lines.append("|---------|-----------|----------|")
+            for name, val in top_effects:
+                gt_str = f"{gt[name]:.3f}" if name in gt else "—"
+                lines.append(f"| {display_name(name)} | {val:.3f} | {gt_str} |")
+            lines.append("")
 
     # Neighbors
     neighbors = v.get("neighbors", [])
@@ -188,7 +209,7 @@ def build_prompt(v: dict) -> str:
 
 # ── Server ────────────────────────────────────────────────────────────────
 
-BUILD_DIR: Path = Path("webapp/build_v2")
+BUILD_DIR: Path = Path("webapp/build")
 _variant_locks: dict[str, asyncio.Lock] = {}
 
 
