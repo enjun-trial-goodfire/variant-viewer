@@ -92,11 +92,14 @@ def _safe_vid_to_filename(vid: str) -> str:
 def build_prompt(v: dict) -> str:
     """Build the interpretation prompt from a per-variant JSON."""
     score = v["score"]
-    lines = [
-        f"## {v['gene']} — {v['id']}",
-        f"{v.get('consequence', '?')}",
-        f"Protein: {v.get('hgvsp', 'N/A')}  |  Coding: {v.get('hgvsc', 'N/A')}",
-    ]
+    lines = [f"## {v['gene']} — {v['id']}", v.get('consequence', '?')]
+    if v.get('hgvsp') or v.get('hgvsc'):
+        parts = []
+        if v.get('hgvsp'):
+            parts.append(f"Protein: {v['hgvsp']}")
+        if v.get('hgvsc'):
+            parts.append(f"Coding: {v['hgvsc']}")
+        lines.append("  |  ".join(parts))
 
     # Label context
     label = v.get("label", "?")
@@ -185,7 +188,8 @@ def build_prompt(v: dict) -> str:
         n_v = v.get("nV", 0)
         lines.append(f"### Nearest Neighbors: {n_p} pathogenic, {n_b} benign, {n_v} VUS")
         for nb in neighbors[:5]:
-            lines.append(f"- {nb['gene']} ({nb['label']}, score={nb['score']:.3f}, sim={nb.get('similarity', '?')})")
+            sim = nb.get('similarity', 0)
+            lines.append(f"- {nb['gene']} ({nb['label']}, score={nb['score']:.3f}, similarity={sim:.3f})")
         lines.append("")
 
     # Additional context

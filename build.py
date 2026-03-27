@@ -166,11 +166,16 @@ def display_name(h: str, domain_cache: dict[str, str] | None = None) -> str:
     if h in _DISPLAY_OVERRIDES:
         return _DISPLAY_OVERRIDES[h]
     base = h.removesuffix("_c")
+    stripped_prefix = ""
     for prefix in _GROUP_PREFIXES:
         if base.startswith(prefix):
+            stripped_prefix = prefix.rstrip("_").replace("_", " ").title()
             base = base[len(prefix):]
             break
     base = base.replace("_", " ")
+    # Keep prefix for very short names (e.g., amino_acid_L → "Amino Acid L")
+    if len(base.strip()) <= 2 and stripped_prefix:
+        return f"{stripped_prefix} {base.strip().upper()}"
     if h.split("_")[0] in _ACRONYMS:
         return base.upper()
     if base.startswith("PF"):
