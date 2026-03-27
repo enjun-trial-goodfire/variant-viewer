@@ -240,6 +240,19 @@ def main() -> None:
     vep = pl.concat(vep_dfs, how="diagonal")
     df = df.join(vep, on="variant_id", how="left")
 
+    # ClinVar submission data (ACMG codes, submitters, cytogenetic, etc.)
+    submissions_path = Path("data/clinvar/submissions.feather")
+    if submissions_path.exists():
+        subs = pl.read_ipc(submissions_path).select(
+            "allele_id", "variation_id", "cytogenetic", "review_status",
+            "acmg_codes", "submitters", "clinical_features",
+            "n_submissions", "last_evaluated", "origin",
+        )
+        df = df.join(subs, on="allele_id", how="left")
+        _t(f"Joined ClinVar submissions ({subs.height:,} records)")
+    else:
+        logger.warning(f"No submissions data at {submissions_path}, run clinvar_submissions.py first")
+
     _t(f"{df.height:,} variants loaded")
 
     # ── Head classification ──────────────────────────────────────────────
@@ -407,6 +420,13 @@ def main() -> None:
         k: col_data.get(f"vep_gnomade_{k}", _none)
         for k in ("afr", "amr", "asj", "eas", "fin", "nfe", "sas")
     }
+    # ClinVar submission fields (may not exist if submissions.feather not generated)
+    clinvar = {
+        k: col_data.get(k, _none)
+        for k in ("variation_id", "cytogenetic", "review_status", "acmg_codes",
+                  "submitters", "clinical_features", "n_submissions",
+                  "last_evaluated", "origin")
+    }
 
     for i in tqdm(range(n), desc="write", mininterval=5):
         vid = col_data["variant_id"][i]
@@ -458,6 +478,15 @@ def main() -> None:
             "loeuf": vep["loeuf"][i],
             "gnomad": vep["gnomade"][i],
             "gnomad_pop": {k: v for k, col in gnomad_pops.items() if (v := col[i]) is not None and v > 0},
+            "variation_id": clinvar["variation_id"][i],
+            "cytogenetic": clinvar["cytogenetic"][i],
+            "review_status": clinvar["review_status"][i],
+            "acmg": [c for c in (clinvar["acmg_codes"][i] or "").split(";") if c],
+            "n_submissions": clinvar["n_submissions"][i],
+            "submitters": [s for s in (clinvar["submitters"][i] or "").split(";") if s],
+            "last_evaluated": clinvar["last_evaluated"][i],
+            "clinical_features": [f for f in (clinvar["clinical_features"][i] or "").split(";") if f and f != "not provided"],
+            "origin": clinvar["origin"][i],
             "disruption": disruption,
             "effect": effect,
             "gt": gt,

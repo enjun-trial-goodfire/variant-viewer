@@ -623,16 +623,28 @@ function renderVariant(v) {
       <div class="verdict-info">
         <div class="verdict-gene">${v.gene}${hgvsp ? ` <span style="font-size:16px;font-weight:400;color:var(--text-secondary)">${hgvsp}</span>` : ''}</div>
         <div class="verdict-id" title="${v.id}">${v.chrom}:${v.vcf_pos ?? (v.pos+1)} ${v.ref}>${v.alt}${v.gene_strand === '-' ? ` &nbsp; (gene strand: ${complement(v.ref)}>${complement(v.alt)})` : ''}${hgvsc ? ` &nbsp; ${hgvsc}` : ''}</div>
-        <div class="verdict-id">${contextParts.join(' \u00b7 ')}</div>
+        <div class="verdict-id">${contextParts.join(' \u00b7 ')}${v.origin ? ` \u00b7 ${v.origin}` : ''}</div>
         <div class="verdict-meta">
           ${labelBadge(v.label)}
           ${stars ? `<span style="color:var(--accent)">${stars}</span>` : ''}
+          ${v.acmg?.length ? v.acmg.map(c => {
+            const col = c.startsWith('PVS') || c.startsWith('PS') ? '#c55' : c.startsWith('PM') ? '#c93' : c.startsWith('PP') ? '#888' : c.startsWith('BA') || c.startsWith('BS') ? '#27a' : c.startsWith('BP') ? '#888' : '#aaa';
+            return `<span style="font-size:10px;font-weight:600;color:${col};background:color-mix(in srgb, ${col} 12%, transparent);padding:1px 5px;border-radius:4px">${c}</span>`;
+          }).join(' ') : ''}
           ${v.disease ? ` \u00b7 ${v.disease}` : ''}
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
           ${af != null ? `gnomAD: <b>${afStr}</b>` : ''}
           ${loeufStr ? ` &nbsp;\u00b7&nbsp; LOEUF: <b>${loeufStr}</b> (${loeufNote})` : ''}
         </div>
+        ${v.review_status || v.n_submissions || v.last_evaluated ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+          ${v.review_status ? `Review: ${v.review_status}` : ''}
+          ${v.n_submissions ? ` \u00b7 ${v.n_submissions} submitter${v.n_submissions > 1 ? 's' : ''}` : ''}
+          ${v.last_evaluated ? ` \u00b7 evaluated ${v.last_evaluated}` : ''}
+        </div>` : ''}
+        ${v.clinical_features?.length ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+          ${v.clinical_features.map(f => `<span style="background:#f0ebe4;padding:1px 6px;border-radius:4px;margin-right:3px">${f}</span>`).join('')}
+        </div>` : ''}
         <div class="verdict-links">
           ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/?term=${v.allele_id}[alleleid]" target="_blank" rel="noopener">ClinVar</a>` : ''}
           <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.vcf_pos ?? (v.pos+1)}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
@@ -642,6 +654,8 @@ function renderVariant(v) {
           ${v.gene_id ? `<a href="https://www.ensembl.org/Homo_sapiens/Gene/Summary?g=${v.gene_id}" target="_blank" rel="noopener">Ensembl</a>` : ''}
           <a href="https://omim.org/search?search=${v.gene}" target="_blank" rel="noopener">OMIM</a>
           <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${v.gene}" target="_blank" rel="noopener">GeneCards</a>
+          <a href="https://varsome.com/variant/hg38/${v.chrom.replace('chr','')}-${v.pos + 1}-${v.ref}-${v.alt}" target="_blank" rel="noopener">VarSome</a>
+          ${v.rs_id ? `<a href="https://www.ncbi.nlm.nih.gov/CBBresearch/Lu/Demo/LitVar3/#!/search?query=${v.rs_id}" target="_blank" rel="noopener">LitVar</a>` : ''}
         </div>
       </div>
       <div class="verdict-score">
