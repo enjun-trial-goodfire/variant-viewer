@@ -600,7 +600,7 @@ function renderVariant(v) {
   const hgvsc = v.hgvsc ? v.hgvsc.split(':').pop() : null;
   const posFormatted = v.pos != null ? v.pos.toLocaleString() : '?';
   const exonStr = v.exon ? `exon ${v.exon}` : '';
-  const domainStr = v.domains ? v.domains.split(';').map(d => d.split(':').pop()).slice(0, 2).join(', ') : '';
+  const domainStr = v.domains ? v.domains.slice(0, 2).map(d => d.name || d.id).join(', ') : '';
   const contextParts = [humanConsequence(v.consequence), exonStr, domainStr].filter(Boolean);
 
   // gnomAD frequency formatting

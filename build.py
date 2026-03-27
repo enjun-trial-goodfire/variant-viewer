@@ -32,12 +32,7 @@ from tqdm import tqdm
 from attribution import AttributionModel
 from umap import UMAP
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
-
-from src.datasets import clinvar
-from src.datasets.clinvar.main import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
 
 _COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
 
@@ -48,7 +43,24 @@ def _vcf_alleles(ref: str, alt: str, strand: str) -> tuple[str, str]:
     return ref, alt
 
 # ── Constants ────────────────────────────────────────────────────────────
+MAYO_DATA = Path(__file__).parent.parent / "data"
 ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
+
+# Consequence → integer encoding (deterministic order by frequency in deconfounded-full)
+CONSEQUENCE_CLASSES = (
+    "missense_variant", "intron_variant", "synonymous_variant", "nonsense",
+    "frameshift_variant", "non-coding_transcript_variant", "splice_donor_variant",
+    "splice_acceptor_variant", "5_prime_UTR_variant", "3_prime_UTR_variant",
+    "splice_region_variant", "start_lost", "inframe_deletion", "inframe_insertion",
+    "inframe_indel", "stop_lost", "genic_downstream_transcript_variant",
+    "genic_upstream_transcript_variant", "no_sequence_alteration",
+    "initiator_codon_variant",
+)
+
+_AA = "ACDEFGHIKLMNPQRSTVWY"
+AA_SWAP_CLASSES = tuple(f"{a}>{b}" for a in _AA for b in _AA if a != b)
+
+ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations_v8.feather"
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS = ARTIFACTS / "clinvar_evo2_vus"
 PROBE = "probe_v8"
@@ -56,6 +68,10 @@ K_NEIGHBORS = 10
 LABEL_TO_IDX = {"benign": 0, "pathogenic": 1, "VUS": 2}
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
 VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations"
+VEP_DOMAIN_CACHE = Path(
+    "/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/annotations/"
+    "sources/cache/vep_domain_lookup.json"
+)
 VEP_COLS = (
     "variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
     "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot",
@@ -126,7 +142,34 @@ for _group, _prefixes in {
     _PREFIX_TO_GROUP.update({p: _group for p in _prefixes})
 
 
-def display_name(h: str) -> str:
+def load_domain_names() -> dict[str, str]:
+    """Load VEP domain ID→name cache (e.g. 'Pfam:PF00079' → 'Serpin')."""
+    if VEP_DOMAIN_CACHE.exists():
+        with open(VEP_DOMAIN_CACHE) as f:
+            return json.load(f)
+    return {}
+
+
+def resolve_domains(raw: str | None, cache: dict[str, str]) -> list[dict] | None:
+    """Convert 'Pfam:PF00079;CDD:cd02056;...' to [{db, id, name?}, ...]."""
+    if not raw:
+        return None
+    result = []
+    for entry in raw.split(";"):
+        parts = entry.split(":", 1)
+        if len(parts) != 2:
+            continue
+        db, did = parts
+        key = f"{db}:{did}"
+        name = cache.get(key)
+        d = {"db": db, "id": did}
+        if name:
+            d["name"] = name
+        result.append(d)
+    return result or None
+
+
+def display_name(h: str, domain_cache: dict[str, str] | None = None) -> str:
     """Human-readable head name, with group prefix stripped."""
     if h in _DISPLAY_OVERRIDES:
         return _DISPLAY_OVERRIDES[h]
@@ -139,7 +182,8 @@ def display_name(h: str) -> str:
     if h.split("_")[0] in _ACRONYMS:
         return base.upper()
     if base.startswith("PF"):
-        return base
+        name = (domain_cache or {}).get(f"Pfam:{base}")
+        return f"{name} ({base})" if name else base
     return base.title()
 
 
@@ -167,6 +211,21 @@ def sanitize_vid(v: str) -> str:
     return f"{s[:60]}_{h:016x}"
 
 
+def load_metadata(preset: str) -> pl.DataFrame:
+    """Load ClinVar metadata and enrich with gene_id/gene_strand from GENCODE."""
+    meta = pl.read_ipc(MAYO_DATA / "clinvar" / preset / "metadata.feather")
+    genes = (
+        pl.read_ipc(MAYO_DATA / "gencode" / "genes.feather")
+        .select("gene_name", "gene_id", "strand")
+        .unique(subset=["gene_name"])
+    )
+    return (
+        meta.join(genes, on="gene_name", how="inner")
+        .unique(subset=["variant_id"])
+        .rename({"strand": "gene_strand"})
+    )
+
+
 def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
     """Histogram of [0, 1) values into n_bins bins."""
     v = values[~values.isnan()]
@@ -190,11 +249,11 @@ def main() -> None:
 
     scores_l = pl.read_ipc(str(LABELED / PROBE / "scores.feather"))
     scores_v = pl.read_ipc(str(VUS / PROBE / "scores.feather"))
-    meta_l = clinvar.metadata("deconfounded-full").select(
+    meta_l = load_metadata("deconfounded-full").select(
         "variant_id", "label", "consequence", "gene_name",
         "clinical_significance", "stars", "disease_name",
         "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
-    meta_v = clinvar.metadata("vus").select(
+    meta_v = load_metadata("vus").select(
         "variant_id", "consequence", "gene_name",
         "clinical_significance", "disease_name",
         "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
@@ -217,7 +276,7 @@ def main() -> None:
         pl.col("pred_aa_swap").replace_strict(dict(enumerate(AA_SWAP_CLASSES)), default=None).alias("substitution"),
     )
 
-    gt = clinvar.annotations("deconfounded-full")
+    gt = pl.read_ipc(ANNOTATIONS)
     df = df.join(
         gt.rename({c: f"gt_{c}" for c in gt.columns if c != "variant_id"}),
         on="variant_id", how="left",
@@ -253,7 +312,8 @@ def main() -> None:
     else:
         logger.warning(f"No submissions data at {submissions_path}, run clinvar_submissions.py first")
 
-    _t(f"{df.height:,} variants loaded")
+    domain_cache = load_domain_names()
+    _t(f"{df.height:,} variants loaded, {len(domain_cache):,} domain names cached")
 
     # ── Head classification ──────────────────────────────────────────────
     cfg = json.loads((LABELED / PROBE / "config.json").read_text())
@@ -379,7 +439,7 @@ def main() -> None:
     attribution_path = LABELED / PROBE / "attribution.json"
     if attribution_path.exists():
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df, n_specific=10)
+        attr_df = attr_model.attribute(df)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:
@@ -474,7 +534,7 @@ def main() -> None:
             "exon": vep["exon"][i],
             "transcript": vep["transcript_id"][i],
             "swissprot": vep["swissprot"][i],
-            "domains": vep["domains"][i],
+            "domains": resolve_domains(vep["domains"][i], domain_cache),
             "loeuf": vep["loeuf"][i],
             "gnomad": vep["gnomade"][i],
             "gnomad_pop": {k: v for k, col in gnomad_pops.items() if (v := col[i]) is not None and v > 0},
@@ -546,7 +606,7 @@ def main() -> None:
         "head_distributions": hh,
         "eval": eval_metrics,
         "heads": {"disruption": auto_group(set(disruption_heads)), "effect": auto_group(set(effect_heads))},
-        "display": {h: display_name(h) for h in all_head_names},
+        "display": {h: display_name(h, domain_cache) for h in all_head_names},
         "decomposition": json.loads(decomp_path.read_text()) if decomp_path.exists() else None,
     }))
 

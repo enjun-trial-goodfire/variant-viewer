@@ -60,7 +60,8 @@ impact                string|null — VEP impact (HIGH/MODERATE/LOW/MODIFIER)
 exon                  string|null — exon number (e.g., "14/35")
 transcript            string|null — Ensembl transcript ID
 swissprot             string|null — UniProt accession
-domains               string|null — protein domains (semicolon-separated)
+domains               array|null — protein domains
+  []                  {db, id, name?} — database, accession, human-readable name
 loeuf                 float|null — loss-of-function observed/expected upper bound
 gnomad                float|null — gnomAD exome allele frequency
 gnomad_pop            Per-ancestry frequencies (sparse, only >0)

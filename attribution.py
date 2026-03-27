@@ -172,5 +172,5 @@ class AttributionModel:
         data["head_names"] = tuple(tuple(x) for x in data["head_names"])
         data["diff_heads"] = tuple(data["diff_heads"])
         data["ref_heads"] = tuple(data["ref_heads"])
-        data.setdefault("baseline_heads", ())
+        data.pop("baseline_heads", None)
         return cls(**data)
