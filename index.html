@@ -118,8 +118,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 /* ── Detail expansion ─────────────────────────────────────────────── */
 .profile-detail { display: grid; grid-template-rows: 0fr;
   transition: grid-template-rows 0.25s ease; overflow: hidden;
-  border-top: 1px solid var(--border); margin-top: 4px;
-  &.open { grid-template-rows: 1fr; }
+  border-top: 1px solid transparent; margin-top: 4px;
+  &.open { grid-template-rows: 1fr; border-top-color: var(--border); }
   & > .detail-inner { overflow: hidden; padding: 0; transition: padding 0.25s ease; }
   &.open > .detail-inner { padding: 10px 0; }
   & .chart-wrap { position: relative; width: 100%; height: 160px; }
@@ -219,9 +219,9 @@ const searchResults = document.getElementById('search-results');
 const content = document.getElementById('content');
 const tooltip = document.getElementById('umap-tooltip');
 
-let distributionData = null, umapData = null, distChart = null, currentVariant = null;
+let distributions = null, umapData = null, distChart = null, currentVariant = null;
 let globalData = null, searchIndex = null, searchIndexPromise = null;
-const headDistCache = {}, detailCharts = {};
+const detailCharts = {};
 const LABEL_NAMES = ['benign', 'pathogenic', 'VUS'];
 const COLLAPSE_THRESHOLD = 5;
 
@@ -278,9 +278,8 @@ function evalBadge(head) {
 // ── Data loading ─────────────────────────────────────────────────────
 const globalReady = fetch('global.json').then(r => r.json()).then(g => {
   umapData = g.umap;
-  distributionData = g.distribution;
+  distributions = g.distributions;
   globalData = { heads: g.heads, display: g.display, eval: g.eval };
-  Object.assign(headDistCache, g.head_distributions);
   if (document.getElementById('umap-container')) renderUmap();
   if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
 });
@@ -422,7 +421,7 @@ function toggleBarDetail(head, label, value, rowEl, gt) {
     summary += ` Database: <b>${gt.toFixed(3)}</b> (${cal}, |err|=${err.toFixed(3)}).`;
   } else summary += ' No database value available.';
   detail.querySelector('.detail-summary').innerHTML = summary;
-  if (headDistCache[head]) renderDetailChart(did, headDistCache[head], value);
+  if (distributions?.[head]) renderDetailChart(did, distributions[head], value);
 }
 
 function renderDetailChart(did, data, value) {
@@ -673,6 +672,61 @@ function renderVariant(v) {
   const gt = v.gt || {};
   const effLookup = v.effect || {};
 
+  // --- Score Attribution (above predictors) ---
+  const attr = v.attribution;
+  if (attr?.effect?.length || attr?.disruption?.length) {
+    const cColor = c => c > 0 ? '#c55' : '#27a';
+    const allItems = [...attr.effect, ...attr.disruption];
+    const maxC = allItems.reduce((m, h) => Math.max(m, Math.abs(h.contribution)), 0.01);
+    const n_shown = allItems.length;
+    const featureTotal = attr.logit != null ? attr.logit - (attr.intercept || 0) : null;
+    const shown_sum = allItems.reduce((s, h) => s + h.contribution, 0);
+    const other = featureTotal != null ? featureTotal - shown_sum : null;
+
+    function contribRow(item) {
+      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+      const c = item.contribution;
+      const barW = Math.abs(c) / maxC * 100;
+      const pct = featureTotal ? Math.abs(c / featureTotal * 100).toFixed(0) : '';
+      return `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${item.score},this,null)">
+        <div class="profile-label">${name}</div>
+        <div class="profile-bar-container">
+          <div style="width:${barW}%;height:100%;background:${cColor(c)};border-radius:3px;opacity:0.65"></div>
+        </div>
+        <div style="width:45px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:${cColor(c)};flex-shrink:0">${pct}%</div>
+      </div>`;
+    }
+
+    html += `<div class="card"><div class="section-title">Score Attribution</div>
+      <div class="profile-legend">
+        Feature contributions to pathogenicity: <span style="color:#c55">pathogenic</span>, <span style="color:#27a">protective</span>
+      </div>`;
+
+    if (attr.effect?.length) {
+      const sorted = [...attr.effect].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+      html += `<div class="profile-group"><div class="profile-group-title">Predicted properties</div>`;
+      html += sorted.map(contribRow).join('');
+      html += `</div>`;
+    }
+
+    if (attr.disruption?.length) {
+      const sorted = [...attr.disruption].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+      html += `<div class="profile-group"><div class="profile-group-title">Mutation impact</div>`;
+      html += sorted.map(contribRow).join('');
+      html += `</div>`;
+    }
+
+    // Summary line
+    if (featureTotal != null) {
+      const otherPct = Math.abs(other / featureTotal * 100).toFixed(0);
+      html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0 0;border-top:1px solid var(--border);display:flex;gap:16px">
+        <span>Other ${attr.n_heads - n_shown} heads: <span style="color:${cColor(other)}">${otherPct}%</span></span>
+        <span>Baseline: <span style="color:${cColor(attr.intercept)}">${Math.abs(attr.intercept / attr.logit * 100).toFixed(0)}%</span></span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
   // --- Computational Predictors card ---
   // Database values (actual tool outputs) take priority; probe predictions as fallback
   const predictors = [
@@ -710,54 +764,6 @@ function renderVariant(v) {
         Consensus: <b>${nDam}/${predRows.length}</b> ${consensus} ${nDam > predRows.length / 2 ? '(supports PP3)' : '(supports BP4)'}
       </div>
     </div>`;
-  }
-
-  // --- Attribution ---
-  const attr = v.attribution;
-  if (attr?.effect?.length || attr?.disruption?.length) {
-    function attrEffectRow(item) {
-      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-      const badge = evalBadge(item.name);
-      const cc = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
-      return `<div class="profile-row">
-        <div class="profile-label">${name}${badge}</div>
-        <div class="profile-bar-container">
-          <div class="profile-bar" style="width:${Math.max(2, item.score * 100)}%;background:${barColor(item.score)}"></div>
-        </div>
-        <div class="profile-value" style="color:${cc};font-weight:600">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(3)}</div>
-      </div>`;
-    }
-    function attrDisruptionRow(item) {
-      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-      const badge = evalBadge(item.name);
-      const d = item.score;
-      const cc = item.contribution > 0 ? 'var(--negative)' : 'var(--positive)';
-      const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d < 0 ? 'var(--negative)' : 'var(--positive)';
-      const pct = Math.min(Math.abs(d) * 200, 50);
-      const side = d >= 0 ? 'left:50%' : `left:${50 - pct}%`;
-      return `<div class="profile-row">
-        <div class="profile-label">${name}${badge}</div>
-        <div class="profile-bar-container" style="position:relative">
-          <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>
-          <div style="position:absolute;${side};width:${pct}%;height:10px;background:${dc};border-radius:2px;top:3px"></div>
-        </div>
-        <div class="profile-delta" style="color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(3)}</div>
-        <div class="profile-value" style="color:${cc};font-weight:600">${item.contribution > 0 ? '+' : ''}${item.contribution.toFixed(3)}</div>
-      </div>`;
-    }
-    html += `<div class="card"><div class="section-title">Score Attribution</div>
-      <div class="profile-legend">Top biological features driving the pathogenicity score (R\u00b2 = 0.92)</div>`;
-    if (attr.effect?.length) {
-      html += `<div class="profile-group"><div class="profile-group-title">Variant Effects</div>`;
-      html += attr.effect.map(attrEffectRow).join('');
-      html += `</div>`;
-    }
-    if (attr.disruption?.length) {
-      html += `<div class="profile-group"><div class="profile-group-title">Disruptions</div>`;
-      html += attr.disruption.map(attrDisruptionRow).join('');
-      html += `</div>`;
-    }
-    html += `</div>`;
   }
 
   // --- Nearest Neighbors ---
@@ -817,7 +823,7 @@ function renderVariant(v) {
     const maxAF = Math.max(...pops.map(([k]) => v.gnomad_pop[k] || 0), 1e-6);
     html += `<div class="card">
       <div class="section-title">Population Frequency</div>
-      <div style="font-size:13px;margin-bottom:10px">gnomAD exome: <b>${afStr}</b>${afNote ? ` &mdash; <span style="color:var(--text-muted)">${afNote}</span>` : ''}</div>
+      <div style="font-size:13px;margin-bottom:10px">gnomAD exome: <b>${afStr}</b>${afNote ? ` \u00b7 <span style="color:var(--text-muted)">${afNote}</span>` : ''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;font-size:12px">
         ${pops.map(([k, label]) => {
           const f = v.gnomad_pop[k];
@@ -840,6 +846,7 @@ function renderVariant(v) {
 }
 
 function renderDistChart(v) {
+  const distributionData = distributions?.pathogenic;
   if (!distributionData) return;
   const el = document.getElementById('dist-chart'); if (!el) return;
   const bins = distributionData.bins;

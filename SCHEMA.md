@@ -15,12 +15,11 @@ umap                  UMAP scatter data (30K points, compact encoding)
   labels            int[] — 0=benign, 1=pathogenic, 2=VUS
   gene_list         string[] — deduplicated gene names
 
-distribution          Pathogenicity score histogram
-  benign, pathogenic  int[] — bin counts
-  bins                int — number of bins
-
-head_distributions    Per-head histograms (for detail expansion)
+distributions         Per-head histograms (unified, includes pathogenicity)
+  pathogenic          Pathogenicity score histogram (80 bins)
   {head_key}          {benign: int[], pathogenic: int[], bins: int}
+                      Effect heads: histogram of predicted value (score_*)
+                      Disruption heads: histogram of var-ref delta
 
 heads                 Head schema — defines groups and membership
   disruption          {group_name: [head_key, ...], ...}

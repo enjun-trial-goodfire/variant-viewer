@@ -195,6 +195,13 @@ def auto_group(heads: set[str]) -> dict[str, list[str]]:
     return g
 
 
+def _parse_attribution(json_str: str | None) -> dict:
+    """Parse attribution JSON. Expects {effect: [...], disruption: [...]}."""
+    if not json_str:
+        return {}
+    return orjson.loads(json_str)
+
+
 def sanitize_vid(v: str) -> str:
     """Make a variant ID safe for use as a filename.
 
@@ -239,6 +246,14 @@ def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
 # ── Main build ───────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Build variant viewer static site")
+    parser.add_argument("output", nargs="?", default="webapp/build", help="Output directory")
+    parser.add_argument("--no-sync", action="store_true", help="Write to /tmp, skip rsync")
+    parser.add_argument("--skip-umap", action="store_true", help="Skip UMAP computation (reuse from previous build)")
+    parser.add_argument("--skip-neighbors", action="store_true", help="Skip neighbor computation")
+    args = parser.parse_args()
+
     t0 = time.time()
 
     def _t(msg: str) -> None:
@@ -360,13 +375,22 @@ def main() -> None:
             ids.extend(batch.sequence_ids)
         return torch.cat(embeddings), ids
 
-    emb_l, ids_l = load_emb(LABELED)
-    emb_v, ids_v = load_emb(VUS)
-    emb = torch.nn.functional.normalize(torch.cat([emb_l, emb_v]).float(), dim=1)
-    emb_ids = ids_l + ids_v
-    n_emb = len(emb_ids)
+    if args.skip_neighbors and args.skip_umap:
+        _t("Skipping embeddings (--skip-neighbors --skip-umap)")
+        nb_map = {}
+        emb_df = None
+    else:
+        emb_l, ids_l = load_emb(LABELED)
+        emb_v, ids_v = load_emb(VUS)
+        emb = torch.nn.functional.normalize(torch.cat([emb_l, emb_v]).float(), dim=1)
+        emb_ids = ids_l + ids_v
+        n_emb = len(emb_ids)
 
-    _t("GPU cosine similarity...")
+    if args.skip_neighbors:
+        _t("Skipping neighbors (--skip-neighbors)")
+        nb_map = {}
+    else:
+        _t("GPU cosine similarity...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     emb_gpu = emb.to(device, non_blocking=True)
     topk_indices, topk_values = [], []
@@ -417,33 +441,41 @@ def main() -> None:
     _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
 
     # ── UMAP ─────────────────────────────────────────────────────────────
-    _t("UMAP...")
-    rng = np.random.RandomState(42)
-    n_sample = min(30_000, n_emb)
-    umap_idx = np.sort(rng.choice(n_emb, n_sample, replace=False))
+    if args.skip_umap:
+        _t("Skipping UMAP (--skip-umap)")
+        umap_coords = None
+        umap_sub = None
+        gene_list = []
+        gene_to_idx = {}
+    else:
+        _t("UMAP...")
+        rng = np.random.RandomState(42)
+        n_sample = min(30_000, n_emb)
+        umap_idx = np.sort(rng.choice(n_emb, n_sample, replace=False))
 
-    pca = PCA(n_components=50, random_state=42).fit_transform(emb[umap_idx].numpy())
-    umap_coords = UMAP(
-        n_components=2, n_neighbors=30, min_dist=0.05, spread=10.0,
-        metric="correlation", random_state=42,
-    ).fit_transform(pca)
+        pca = PCA(n_components=50, random_state=42).fit_transform(emb[umap_idx].numpy())
+        umap_coords = UMAP(
+            n_components=2, n_neighbors=30, min_dist=0.05, spread=10.0,
+            metric="correlation", random_state=42,
+        ).fit_transform(pca)
 
-    # Compact UMAP metadata: int labels, gene index, 2dp coords
-    umap_sub = emb_df.select(
-        "variant_id", "gene", "label", pl.col("score").round(2),
-    )[umap_idx.tolist()]
-    gene_list = sorted(umap_sub["gene"].unique().to_list())
-    gene_to_idx = {g: i for i, g in enumerate(gene_list)}
+        umap_sub = emb_df.select(
+            "variant_id", "gene", "label", pl.col("score").round(2),
+        )[umap_idx.tolist()]
+        gene_list = sorted(umap_sub["gene"].unique().to_list())
+        gene_to_idx = {g: i for i, g in enumerate(gene_list)}
 
     # ── Attribution ──────────────────────────────────────────────────────
     attribution_path = LABELED / PROBE / "attribution.json"
     if attribution_path.exists():
         attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df)
+        attr_df = attr_model.attribute(df, k_effect=10, k_disruption=10)
         attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
+        attr_logits = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_logit"].tolist(), strict=True))
         _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
     else:
         attr_by_vid = {}
+        attr_logits = {}
         logger.warning(f"No attribution model at {attribution_path}, skipping")
 
     # ── Write to staging ─────────────────────────────────────────────────
@@ -550,7 +582,8 @@ def main() -> None:
             "disruption": disruption,
             "effect": effect,
             "gt": gt,
-            "attribution": orjson.loads(attr_by_vid[vid]) if vid in attr_by_vid else [],
+            "attribution": _parse_attribution(attr_by_vid.get(vid)),
+            "attr_logit": attr_logits.get(vid),
             "neighbors": neighbors,
             "nP": n_p, "nB": n_b, "nV": len(neighbors) - n_p - n_b,
         }
@@ -597,7 +630,7 @@ def main() -> None:
             "genes": [gene_to_idx[g] for g in umap_sub["gene"].to_list()],
             "labels": [LABEL_TO_IDX.get(lab, 2) for lab in umap_sub["label"].to_list()],
             "gene_list": gene_list,
-        },
+        } if umap_coords is not None else None,
         "distribution": {
             "benign": prebin(scores_t[ben_mask], 80),
             "pathogenic": prebin(scores_t[path_mask], 80),
@@ -639,10 +672,9 @@ def main() -> None:
             shutil.copy2(f, interp_dst / f.name)
 
     # ── Sync or serve from staging ───────────────────────────────────────
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("webapp/build")
-    no_sync = "--no-sync" in sys.argv
+    out = Path(args.output)
 
-    if no_sync:
+    if args.no_sync:
         _t(f"Done. {n:,} variants in {staging} (--no-sync, skipping rsync)")
         print(f"STAGING_DIR={staging}")
     else:
