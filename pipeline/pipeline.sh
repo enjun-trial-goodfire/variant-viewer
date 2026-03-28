@@ -58,7 +58,7 @@ echo "Step 3: Eval + build..."
 EVAL_BUILD=$(sbatch --parsable --dependency=afterok:${WAIT_FOR} \
     --job-name=eval-build --gpus=1 --time=02:00:00 \
     --output=outputs/eval_build_%j.out \
-    --wrap="cd \${SLURM_SUBMIT_DIR} && PYTHONPATH=. uv run python -c \"
+    --wrap="cd \${SLURM_SUBMIT_DIR} && uv run python -c \"
 import json, numpy as np, polars as pl
 from sklearn.metrics import roc_auc_score
 from scipy.stats import pearsonr
@@ -69,7 +69,7 @@ scores = pl.read_ipc(str(probe_dir / 'scores.feather'))
 split = pl.read_ipc(str(probe_dir / 'split.feather'))
 test_ids = set(split.filter(pl.col('split') == 'test')['variant_id'].to_list())
 
-gt = pl.read_ipc('data/clinvar/deconfounded-full/annotations_v9.feather')
+gt = pl.read_ipc('data/clinvar/deconfounded-full/annotations.feather')
 meta = pl.read_ipc('data/clinvar/deconfounded-full/metadata.feather').select('variant_id', 'label')
 df = scores.join(gt, on='variant_id', how='left').join(meta, on='variant_id', how='left').filter(pl.col('variant_id').is_in(list(test_ids)))
 
@@ -103,7 +103,7 @@ eval_results['pathogenic'] = {'kind': 'binary', 'auc': round(float(roc_auc_score
 
 (probe_dir / 'eval.json').write_text(json.dumps(eval_results, indent=2))
 print(f'eval.json: {len(eval_results)} heads, pathogenicity AUC={eval_results[\"pathogenic\"][\"auc\"]}')
-\" && echo 'Eval done, building webapp...' && PYTHONPATH=. uv run python build.py --no-sync")
+\" && echo 'Eval done, building webapp...' && uv run python build.py")
 
 echo "  Eval + build: ${EVAL_BUILD} (after ${WAIT_FOR})"
 echo ""

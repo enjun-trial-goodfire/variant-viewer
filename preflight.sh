@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-PROBE="${1:-probe_v8}"
+PROBE="${1:-probe_v9}"
 ARTIFACTS="/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian"
 LABELED="$ARTIFACTS/clinvar_evo2_deconfounded_full"
 VUS="$ARTIFACTS/clinvar_evo2_vus"

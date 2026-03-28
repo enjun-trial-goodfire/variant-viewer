@@ -66,7 +66,7 @@ pipeline/
 
 **Local** (`data/`, not in git — symlink to gfm_gen/data on cluster):
 - `data/clinvar/deconfounded-full/metadata.feather` — labeled metadata
-- `data/clinvar/deconfounded-full/annotations_v8.feather` — ground truth
+- `data/clinvar/deconfounded-full/annotations.feather` — ground truth
 - `data/clinvar/vus/metadata.feather` — VUS metadata
 - `data/gencode/genes.feather` — gene coordinates
 
@@ -76,7 +76,7 @@ pipeline/
 - `clinvar_evo2_vus/{probe}/scores.feather`
 - `clinvar_evo2_labeled/variant_annotations/variant_annotations_chr*.parquet`
 
-Run `bash preflight.sh probe_v8` to check everything exists.
+Run `bash preflight.sh probe_v9` to check everything exists.
 
 ## Code conventions
 
@@ -86,7 +86,7 @@ Run `bash preflight.sh probe_v8` to check everything exists.
 - **orjson** for JSON serialization (speed matters: 232K variant files)
 - See `SCHEMA.md` for the JSON data contract
 - Hardcoded paths are in build.py constants — update when artifacts move
-- Current probe: `probe_v8` (`d_hidden=32, d_probe=128, focal_gamma=3.0`)
+- Current probe: `probe_v9` (`d_hidden=32, d_probe=128, focal_gamma=3.0`)
 
 ## Known limitations
 

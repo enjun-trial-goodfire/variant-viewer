@@ -13,7 +13,7 @@ SCRIPTS_DIR="${SCRIPTS_DIR:-/mnt/polished-lake/scripts}"
 PORT="${1:-8501}"
 
 # Build to /tmp (fast)
-uv run python webapp/build.py --no-sync
+uv run python build.py
 BUILD_DIR=$(grep '^STAGING_DIR=' "outputs/variant_viewer_${SLURM_JOB_ID}.out" | tail -1 | cut -d= -f2)
 
 if [ -z "$BUILD_DIR" ] || [ ! -d "$BUILD_DIR" ]; then
