@@ -27,7 +27,7 @@ import polars as pl
 import torch
 from loguru import logger
 from sklearn.decomposition import PCA
-from tqdm import tqdm
+from rich.progress import track
 
 from attribution import AttributionModel
 from umap import UMAP
@@ -344,7 +344,7 @@ def main() -> None:
                   "last_evaluated", "origin")
     }
 
-    for i in tqdm(range(n), desc="write", mininterval=5):
+    for i in track(range(n), description="Writing variants..."):
         vid = col_data["variant_id"][i]
 
         # Only include heads with meaningful delta

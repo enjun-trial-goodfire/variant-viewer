@@ -16,17 +16,24 @@ dependencies = [
     "scikit-learn>=1.8",
     "umap-learn",
     "loguru>=0.7",
-    "tqdm>=4.66",
+    "rich>=13",
+    "typer>=0.12",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
     "goodfire-core>=0.3.0",
     "scipy>=1.14",
 ]
+
+[project.scripts]
+vv = "cli:app"
 
 [project.optional-dependencies]
 interpret = ["anthropic"]
 serve = ["starlette>=0.45", "uvicorn[standard]", "anthropic"]
 
 [tool.setuptools]
-packages = []
+packages = ["probe"]
+py-modules = ["cli", "build", "serve", "constants", "display", "paths", "prompts", "attribution"]
 
 [tool.ruff]
 line-length = 120

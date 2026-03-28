@@ -33,7 +33,7 @@ echo "Local data (data/):"
 check "$DATA/clinvar/deconfounded-full/metadata.feather" "Labeled metadata"
 check "$DATA/clinvar/vus/metadata.feather" "VUS metadata"
 check "$DATA/gencode/genes.feather" "GENCODE genes"
-check "$DATA/clinvar/deconfounded-full/annotations_v8.feather" "Annotations v8"
+check "$DATA/clinvar/deconfounded-full/annotations.feather" "Annotations"
 
 echo ""
 echo "Shared artifacts (probe scores + embeddings):"
