@@ -21,7 +21,7 @@ AA_SWAP_CLASSES = tuple(f"{a}>{b}" for a in _AA for b in _AA if a != b)
 LABEL_TO_IDX = {"benign": 0, "pathogenic": 1, "VUS": 2}
 
 # Calibration: % of variants that are actually pathogenic in each score bin.
-# Source: labeled variants from clinvar_evo2_deconfounded_full, probe_v6.
+# Source: labeled variants from clinvar_evo2_deconfounded_full, probe_v9.
 # Bounds are [lo, hi) — the last bin uses 1.01 to include score == 1.0.
 CALIBRATION = {
     (0.0, 0.1): 1.8, (0.1, 0.3): 15.6, (0.3, 0.5): 44.4,

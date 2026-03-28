@@ -5,7 +5,7 @@
 #   bash scripts/pipeline.sh /path/to/probe [--labeled-only]
 #
 # Example:
-#   bash scripts/pipeline.sh $ACTS/probe_v8
+#   bash scripts/pipeline.sh $ACTS/probe_v9
 #
 # This chains SLURM jobs with dependencies so the full pipeline runs unattended.
 # The final output is a webapp build in /tmp ready to serve.

@@ -9,7 +9,7 @@ Two score types:
   - **effect**: score from the diff-view probe. Predicts variant-level properties
     (clinical predictors, consequence, domain effects). Stored as scalars per head.
 
-Timings (H200, 232K variants, probe_v7):
+Timings (H200, 232K variants, probe_v9):
   Load 3s | GPU similarity 10s | Neighbors 3s | UMAP 40s | Write 70s | Total ~2min
 """
 

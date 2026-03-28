@@ -6,7 +6,7 @@
 #       --probe /path/to/probe --activations /path/to/storage
 
 #SBATCH --job-name=extract
-#SBATCH --gres=gpu:1
+#SBATCH --gpus=1
 #SBATCH --time=4:00:00
 #SBATCH --output=logs/extract/%x_%A_%a.out
 #SBATCH --error=logs/extract/%x_%A_%a.err
@@ -18,7 +18,7 @@ mkdir -p logs/extract
 
 echo "=== Extract shard ${SLURM_ARRAY_TASK_ID}/${SLURM_ARRAY_TASK_COUNT:-1} on $(hostname) ==="
 
-PYTHONPATH=. uv run python pipeline/extract.py \
+uv run python pipeline/extract.py \
     --shard-id "${SLURM_ARRAY_TASK_ID}" \
     --n-shards "${SLURM_ARRAY_TASK_COUNT:-1}" \
     "$@"

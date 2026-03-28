@@ -50,7 +50,7 @@ ARTIFACTS = Path(
 )
 LABELED_ACT = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS_ACT = ARTIFACTS / "clinvar_evo2_vus"
-PROBE = "probe_v8"
+PROBE = "probe_v9"
 OUTPUT_DIR = VUS_ACT / "interpretations"
 
 CSQ_LABELS = {i: name for i, name in enumerate(CONSEQUENCE_CLASSES)}

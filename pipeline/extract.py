@@ -15,12 +15,12 @@ Outputs (written to {activations}/{probe_name}/):
   scores.feather  ref_score_*, var_score_*, score_*, pred_* columns
 
 Usage:
-    python scripts/extract.py --probe $ACTS/probe_v8 --activations $ACTS
+    python scripts/extract.py --probe $ACTS/probe_v9 --activations $ACTS
 
 Parallel (SLURM array):
     EXTRACT=$(sbatch --parsable --array=0-7 scripts/extract.sh \\
-        --probe $ACTS/probe_v8 --activations $ACTS)
-    sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh $ACTS/probe_v8
+        --probe $ACTS/probe_v9 --activations $ACTS)
+    sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh $ACTS/probe_v9
 """
 
 import argparse
