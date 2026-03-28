@@ -152,4 +152,4 @@ Raw activations [B, 2, 3, K, d]
 Embeddings stacked: [B, 3, d_h, d_h] (index 0=diff, 1=ref, 2=var)
 ```
 
-End-to-end: `bash scripts/pipeline.sh /path/to/probe`
+End-to-end: `bash pipeline/pipeline.sh /path/to/probe`

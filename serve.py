@@ -27,7 +27,6 @@ from prompts import SYSTEM_PROMPT, build_prompt
 
 # ── Server state ──────────────────────────────────────────────────────────
 
-BUILD_DIR: Path = Path("webapp/build")
 _variant_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -41,9 +40,10 @@ async def interpret_endpoint(request):
     """On-demand variant interpretation via Claude API."""
     vid = request.path_params["variant_id"]
     safe = sanitize_vid(vid)
+    build_dir = request.app.state.build_dir
 
     # 1. Check cache
-    cache_dir = BUILD_DIR / "interpretations"
+    cache_dir = build_dir / "interpretations"
     cache_file = cache_dir / f"{safe}.json"
     if cache_file.exists():
         return Response(cache_file.read_bytes(), media_type="application/json")
@@ -54,7 +54,7 @@ async def interpret_endpoint(request):
         return JSONResponse({"status": "unavailable", "error": "ANTHROPIC_API_KEY not set"}, status_code=503)
 
     # 3. Load variant JSON
-    variant_file = BUILD_DIR / "variants" / f"{safe}.json"
+    variant_file = build_dir / "variants" / f"{safe}.json"
     if not variant_file.exists():
         return JSONResponse({"status": "not_found", "error": f"Variant {vid} not found"}, status_code=404)
 
@@ -117,14 +117,13 @@ async def interpret_endpoint(request):
 
 
 def create_app(build_dir: Path) -> Starlette:
-    global BUILD_DIR
-    BUILD_DIR = build_dir
-
     routes = [
         Route("/api/interpret/{variant_id:path}", interpret_endpoint),
         Mount("/", app=StaticFiles(directory=str(build_dir), html=True, follow_symlink=True)),
     ]
-    return Starlette(routes=routes)
+    app = Starlette(routes=routes)
+    app.state.build_dir = build_dir
+    return app
 
 
 def main():

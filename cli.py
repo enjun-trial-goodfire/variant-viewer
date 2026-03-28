@@ -34,17 +34,9 @@ def build(
 ):
     """Build the static variant viewer site to /tmp."""
     from build import main as _build
-    import sys
 
-    argv = []
-    if sync:
-        argv.extend([str(sync), "--sync"])
-    if umap:
-        argv.append("--umap")
-    if neighbors:
-        argv.append("--neighbors")
-    sys.argv = ["build"] + argv
-    _build()
+    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors)
+    rprint(f"[green]Built to:[/] {staging}")
 
 
 @app.command()

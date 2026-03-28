@@ -1,17 +1,12 @@
-"""Generate clinical interpretations for variants using Claude API (v3 probe).
+"""Generate clinical interpretations for variants using Claude API.
 
-Gathers biological context from the 211-head v3 probe scores + ground truth
-annotations, builds a structured prompt, calls Claude, saves JSON.
+Builds structured prompts from raw probe scores + ground truth annotations,
+calls Claude, saves JSON. Uses batch mode for multiple variants.
 
 Usage:
-    # Dry run (print prompt)
-    uv run python scripts/interpret_variants.py --variant chr12:5575980:G:A --dry-run
-
-    # Single variant
-    uv run python scripts/interpret_variants.py --variant chr12:5575980:G:A
-
-    # Batch: top 50 VUS by pathogenicity
-    uv run python scripts/interpret_variants.py --top-vus 50 --concurrency 5
+    uv run python pipeline/interpret.py --variant chr12:5575980:G:A --dry-run
+    uv run python pipeline/interpret.py --variant chr12:5575980:G:A
+    uv run python pipeline/interpret.py --top-vus 50 --concurrency 5
 
 Requires ANTHROPIC_API_KEY environment variable.
 """
@@ -28,26 +23,9 @@ import polars as pl
 import torch
 from loguru import logger
 
-# ── Constants (inlined from gfm_gen/src/datasets/clinvar) ─────────────────
-CONSEQUENCE_CLASSES = (
-    "missense_variant", "intron_variant", "synonymous_variant", "nonsense",
-    "frameshift_variant", "non-coding_transcript_variant", "splice_donor_variant",
-    "splice_acceptor_variant", "5_prime_UTR_variant", "3_prime_UTR_variant",
-    "splice_region_variant", "start_lost", "inframe_deletion", "inframe_insertion",
-    "inframe_indel", "stop_lost", "genic_downstream_transcript_variant",
-    "genic_upstream_transcript_variant", "no_sequence_alteration",
-    "initiator_codon_variant",
-)
+from constants import CONSEQUENCE_CLASSES, AA_SWAP_CLASSES, CALIBRATION, calibration_text
+from paths import ARTIFACTS, MAYO_DATA, load_metadata
 
-_AA = "ACDEFGHIKLMNPQRSTVWY"
-AA_SWAP_CLASSES = tuple(f"{a}>{b}" for a in _AA for b in _AA if a != b)
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-ARTIFACTS = Path(
-    "/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian"
-)
 LABELED_ACT = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS_ACT = ARTIFACTS / "clinvar_evo2_vus"
 PROBE = "probe_v9"
@@ -131,13 +109,6 @@ HEAD_GROUPS = {
 }
 
 # Calibration: % of variants that are actually pathogenic in each score bin.
-# Source: labeled variants from clinvar_evo2_deconfounded_full, probe_v6.
-# Bounds are [lo, hi) — the last bin uses 1.01 to include score == 1.0.
-CALIBRATION = {
-    (0.0, 0.1): 1.8, (0.1, 0.3): 15.6, (0.3, 0.5): 44.4,
-    (0.5, 0.7): 69.6, (0.7, 0.9): 88.1, (0.9, 1.01): 96.7,
-}
-
 SYSTEM_PROMPT = """\
 You are a clinical genomics expert interpreting variant pathogenicity predictions \
 from Evo2, a 7-billion-parameter DNA foundation model.
@@ -187,11 +158,11 @@ def load_data():
     labeled_scores = pl.read_ipc(str(LABELED_ACT / PROBE / "scores.feather"))
     vus_scores = pl.read_ipc(str(VUS_ACT / PROBE / "scores.feather"))
 
-    labeled_meta = clinvar.metadata("deconfounded-full")
-    vus_meta = clinvar.metadata("vus")
+    labeled_meta = load_metadata("deconfounded-full")
+    vus_meta = load_metadata("vus")
 
     # Ground truth annotations
-    gt_annotations = clinvar.annotations("deconfounded-full")
+    gt_annotations = pl.read_ipc(str(MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations.feather"))
 
     meta_cols = ("variant_id", "label", "consequence", "gene_name",
                  "clinical_significance", "stars", "disease_name")
@@ -299,14 +270,6 @@ def _gt_value(row: dict, head: str) -> float | None:
     return fval
 
 
-def _calibration_text(score: float) -> str:
-    """Return calibration context for a score."""
-    for (lo, hi), rate in CALIBRATION.items():
-        if lo <= score < hi:
-            return f"Calibration: among labeled variants scoring {lo:.1f}-{hi:.1f}, {rate:.0f}% are pathogenic."
-    return ""
-
-
 # ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
@@ -337,7 +300,7 @@ def build_prompt(vid: str, data: dict) -> str:
         f"ClinVar: {row.get('label', '?')}" + (f" ({row.get('clinical_significance', '')})" if row.get("label") != "VUS" else ""),
         f"Disease: {row.get('disease_name') or 'None'}",
         f"**Evo2 pathogenicity: {score:.3f} (p{p:.0f})**",
-        _calibration_text(score),
+        calibration_text(score),
         "",
     ]
 

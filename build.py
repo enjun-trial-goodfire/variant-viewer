@@ -74,14 +74,23 @@ def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
 
 # ── Main build ───────────────────────────────────────────────────────────
 
-def main() -> None:
-    import argparse
-    parser = argparse.ArgumentParser(description="Build variant viewer static site")
-    parser.add_argument("output", nargs="?", default=None, help="Output directory (default: /tmp staging)")
-    parser.add_argument("--sync", action="store_true", help="Rsync staging to output dir (default: write to /tmp only)")
-    parser.add_argument("--umap", action="store_true", help="Compute UMAP embedding (slow, ~40s)")
-    parser.add_argument("--neighbors", action="store_true", help="Compute nearest neighbors (requires GPU)")
-    args = parser.parse_args()
+def main(
+    output: Path | None = None,
+    sync: bool = False,
+    umap: bool = False,
+    neighbors: bool = False,
+) -> Path:
+    """Build the variant viewer static site.
+
+    Args:
+        output: Output directory for rsync (default: /tmp staging only).
+        sync: If True, rsync staging to output directory.
+        umap: Compute UMAP embedding (~40s).
+        neighbors: Compute nearest neighbors (requires GPU).
+
+    Returns:
+        Path to the staging directory.
+    """
 
     t0 = time.time()
 
@@ -197,7 +206,7 @@ def main() -> None:
             ids.extend(batch.sequence_ids)
         return torch.cat(embeddings), ids
 
-    if not args.neighbors and not args.umap:
+    if not neighbors and not umap:
         _t("Skipping embeddings (use --neighbors or --umap to enable)")
         nb_map = {}
         emb_df = None
@@ -208,7 +217,7 @@ def main() -> None:
         emb_ids = ids_l + ids_v
         n_emb = len(emb_ids)
 
-    if not args.neighbors:
+    if not neighbors:
         _t("Skipping neighbors (use --neighbors to enable)")
         nb_map = {}
     else:
@@ -227,7 +236,7 @@ def main() -> None:
         topk_v = torch.cat(topk_values).numpy()
         del emb_gpu
 
-    if args.neighbors:
+    if neighbors:
         _t("Building neighbor table...")
         emb_df = (
             pl.DataFrame({"emb_i": range(n_emb), "variant_id": emb_ids})
@@ -264,7 +273,7 @@ def main() -> None:
         _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
 
     # ── UMAP ─────────────────────────────────────────────────────────────
-    if not args.umap:
+    if not umap:
         _t("Skipping UMAP (use --umap to enable)")
         umap_coords = None
         umap_sub = None
@@ -504,16 +513,16 @@ def main() -> None:
             shutil.copy2(f, interp_dst / f.name)
 
     # ── Sync or serve from staging ───────────────────────────────────────
-    if args.sync and args.output:
-        out = Path(args.output)
-        _t(f"Syncing to {out}...")
-        out.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["rsync", "-a", "--delete", f"{staging}/", f"{out}/"], check=True)
+    if sync and output:
+        _t(f"Syncing to {output}...")
+        output.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["rsync", "-a", "--delete", f"{staging}/", f"{output}/"], check=True)
         shutil.rmtree(staging)
-        _t(f"Done. {n:,} variants in {out}")
+        _t(f"Done. {n:,} variants in {output}")
+        return output
     else:
         _t(f"Done. {n:,} variants in {staging}")
-        print(f"STAGING_DIR={staging}")
+        return staging
 
 
 if __name__ == "__main__":
