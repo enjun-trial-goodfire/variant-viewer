@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 import polars as pl
-from loguru import logger
 
 # ── Artifact roots ────────────────────────────────────────────────────────
 ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")

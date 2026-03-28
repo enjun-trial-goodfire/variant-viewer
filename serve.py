@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from constants import CALIBRATION
+
 from paths import sanitize_vid
 from prompts import SYSTEM_PROMPT, build_prompt
 

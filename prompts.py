@@ -124,7 +124,7 @@ def build_prompt(v: dict) -> str:
                 delta_str = val_str
             elif kind == "effect" and name in effect:
                 val_str = f"{effect[name]:.3f}"
-            lines.append(f"| {display_name(name)} | {kind} | {coeff:+.4f} | {val_str} | {delta_str} | {gt_val} |")
+            lines.append(f"| {display_name(name)} | {kind} | {coeff:+.4f} | {val_str} | {delta_str} | {gt_str} |")
         lines.append("")
 
     # Neighbors
