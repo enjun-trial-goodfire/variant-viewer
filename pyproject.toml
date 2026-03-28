@@ -38,7 +38,7 @@ serve = ["anthropic"]
 
 [tool.setuptools]
 packages = ["probe"]
-py-modules = ["cli", "build", "serve", "constants", "display", "paths", "loaders", "prompts", "attribution"]
+py-modules = ["cli", "build", "serve", "constants", "display", "paths", "loaders", "prompts", "attribution", "training"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
