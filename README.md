@@ -12,9 +12,27 @@ building, and serving the viewer.
 
 ```bash
 uv sync
-bash preflight.sh              # check all data is present
-uv run python build.py         # builds to /tmp (--no-sync) or webapp/build/
+bash preflight.sh                    # check all data is present
+uv run python build.py               # builds static site (~2 min on H200)
+```
+
+### Static serving (no interpretation)
+```bash
 python -m http.server -d webapp/build/ 8080
+```
+
+### With on-demand AI interpretation
+```bash
+ANTHROPIC_API_KEY=sk-ant-... uv run --extra serve python serve.py --build-dir webapp/build --port 8501
+```
+
+Interpretations are generated on-demand when you click a variant (~20s, cached to disk).
+For public access on the cluster, tunnel the port:
+
+```bash
+source /mnt/polished-lake/scripts/config.sh
+$SCRIPTS_DIR/bin/tunnel-url 8501
+# → http://100.109.239.81:10017/ (expires in 24h)
 ```
 
 ## Data setup

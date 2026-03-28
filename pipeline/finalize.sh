@@ -17,7 +17,8 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs/embed
 
-export PROBE_DIR="${1:?Usage: finalize_embed.sh <probe-dir>}"
+PROBE_DIR="${1:?Usage: finalize.sh <probe-dir>}"
+export PROBE_DIR
 
 echo "=== Finalize Embeddings ==="
 echo "Output: ${PROBE_DIR}"

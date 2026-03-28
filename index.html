@@ -229,7 +229,11 @@ const COLLAPSE_THRESHOLD = 5;
 const _comp = {A:'T',T:'A',C:'G',G:'C',a:'t',t:'a',c:'g',g:'c'};
 function complement(base) { return base.split('').map(b => _comp[b] || b).join(''); }
 function viewTransition(fn) { document.startViewTransition ? document.startViewTransition(fn) : fn(); }
-function navigate(path) { location.hash = path ? `#/${path}` : '#/'; }
+function navigate(path) {
+  const target = path ? `#/${path}` : '#/';
+  if (location.hash === target) route(); // re-trigger even if hash unchanged
+  else location.hash = target;
+}
 function safeVariantId(vid) {
   const s = vid.replace(/:/g, '_').replace(/\//g, '_');
   if (s.length <= 200) return s;
@@ -268,6 +272,20 @@ function humanConsequence(c) { return !c ? '' : CSQ_DISPLAY[c] || c.replace(/_/g
 function barColor(v) {
   if (v > 0.9) return '#c55'; if (v > 0.75) return '#DB8A48';
   if (v < 0.1) return '#27a'; if (v < 0.25) return '#6ac'; return '#bbb';
+}
+
+function headColor(head, value, isDelta) {
+  const dist = distributions?.[head];
+  if (!dist) return '#bbb';
+  const [lo, hi] = dist.range || [0, 1];
+  const bins = dist.bins || 40;
+  const mapped = (value - lo) / (hi - lo);
+  const bin = Math.max(0, Math.min(bins - 1, Math.floor(mapped * bins)));
+  const bRaw = dist.benign[bin] || 0, pRaw = dist.pathogenic[bin] || 0;
+  if (bRaw + pRaw < 5) return '#bbb';
+  const bTotal = dist._bTotal ??= dist.benign.reduce((a, x) => a + x, 0) || 1;
+  const pTotal = dist._pTotal ??= dist.pathogenic.reduce((a, x) => a + x, 0) || 1;
+  return barColor(pRaw / pTotal / (pRaw / pTotal + bRaw / bTotal));
 }
 
 function evalBadge(head) {
@@ -339,36 +357,38 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
 });
 
-// ── Bar rows (items pre-sorted by build.py) ─────────────────────────
-// Disruption item: {key, ref, var, gt} — display name from globalData.display
-// Effect item:     {key, val, gt}
-function disruptionRow(it) {
-  const name = displayName(it.key), bc = barColor(it.ref), d = it.var - it.ref;
-  const badge = evalBadge(it.key);
-  const dc = Math.abs(d) < 0.02 ? 'var(--text-muted)' : d < 0 ? 'var(--negative)' : 'var(--positive)';
-  const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
-  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${it.var},this,${it.gt ?? 'null'})">
+// ── Bar rows ─────────────────────────────────────────────────────────
+// Disruption: {key, delta, gt}  — centered diverging bar
+// Effect:     {key, val, gt}    — left-anchored bar
+
+function profileRow(key, {bar, value, color, chartVal, gt}) {
+  const name = displayName(key), badge = evalBadge(key);
+  return `<div class="profile-row" onclick="toggleBarDetail('${key}','${name}',${chartVal},this,${gt ?? 'null'})">
     <div class="profile-label">${name}${badge}</div>
-    <div class="profile-bar-container">
-      <div class="profile-bar-ref" style="width:${Math.max(2,it.ref*100)}%;background:${bc}"></div>
-      <div class="profile-bar-var" style="width:${Math.max(2,it.var*100)}%;background:${bc}"></div>${gtM}
-    </div>
-    <div class="profile-value">${it.var.toFixed(3)}</div>
-    <div class="profile-delta" style="color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(2)}</div>
+    <div class="profile-bar-container">${bar}</div>
+    <div class="profile-value" style="color:${color}">${value}</div>
   </div>`;
 }
 
+function disruptionRow(it) {
+  const d = it.delta, color = headColor(it.key, d, true);
+  const barW = Math.min(50, Math.abs(d) * 150);
+  return profileRow(it.key, {
+    bar: `<div style="position:absolute;top:0;left:50%;height:100%;width:${barW}%;background:${color};border-radius:3px;${d < 0 ? 'transform:translateX(-100%)' : ''}"></div>
+          <div style="position:absolute;top:0;left:50%;width:1px;height:100%;background:var(--border)"></div>`,
+    value: `${d > 0 ? '+' : ''}${d.toFixed(3)}`,
+    color, chartVal: d, gt: it.gt,
+  });
+}
+
 function effectRow(it) {
-  const name = displayName(it.key), bc = barColor(it.val);
-  const badge = evalBadge(it.key);
+  const color = headColor(it.key, it.val, false);
   const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
-  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${it.val},this,${it.gt ?? 'null'})">
-    <div class="profile-label">${name}${badge}</div>
-    <div class="profile-bar-container">
-      <div class="profile-bar" style="width:${Math.max(2,it.val*100)}%;background:${bc}"></div>${gtM}
-    </div>
-    <div class="profile-value">${it.val.toFixed(3)}</div>
-  </div>`;
+  return profileRow(it.key, {
+    bar: `<div class="profile-bar" style="width:${Math.max(2,it.val*100)}%;background:${color}"></div>${gtM}`,
+    value: it.val.toFixed(3),
+    color: 'var(--text-secondary)', chartVal: it.val, gt: it.gt,
+  });
 }
 
 // ── Collapsible group (items sorted by JS from flat variant values) ───
@@ -414,7 +434,10 @@ function toggleBarDetail(head, label, value, rowEl, gt) {
   }
   requestAnimationFrame(() => detail.classList.add('open'));
 
-  let summary = `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${currentVariant.consequence}.`;
+  const isDisruption = currentVariant.disruption?.[head] != null;
+  let summary = isDisruption
+    ? `<b>${label}</b>: disruption <b style="color:${headColor(head, value, true)}">${value > 0 ? '+' : ''}${value.toFixed(3)}</b> for this ${humanConsequence(currentVariant.consequence)}.`
+    : `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${humanConsequence(currentVariant.consequence)}.`;
   if (gt != null) {
     const err = Math.abs(value - gt);
     const cal = err < 0.05 ? 'well-calibrated' : err < 0.15 ? 'close' : err < 0.35 ? 'moderately off' : 'poorly calibrated';
@@ -426,11 +449,14 @@ function toggleBarDetail(head, label, value, rowEl, gt) {
 
 function renderDetailChart(did, data, value) {
   const ctx = document.getElementById(did).querySelector('canvas').getContext('2d');
-  const bins = data.bins, mb = Math.min(bins - 1, Math.max(0, Math.floor(value * bins)));
+  const [lo, hi] = data.range || [0, 1];
+  const bins = data.bins;
+  const mapped = (value - lo) / (hi - lo);
+  const mb = Math.min(bins - 1, Math.max(0, Math.floor(mapped * bins)));
   detailCharts[did]?.destroy();
   detailCharts[did] = new Chart(ctx, {
     type: 'bar',
-    data: { labels: Array.from({length: bins}, (_, i) => (i / bins).toFixed(2)),
+    data: { labels: Array.from({length: bins}, (_, i) => (lo + (hi - lo) * i / bins).toFixed(2)),
       datasets: [
         { label: 'Benign', data: data.benign, backgroundColor: 'rgba(34,119,170,0.35)', borderWidth: 0 },
         { label: 'Pathogenic', data: data.pathogenic, backgroundColor: 'rgba(204,85,85,0.35)', borderWidth: 0 },
@@ -455,9 +481,9 @@ function showLanding() {
   searchInput.value = '';
   viewTransition(() => {
     const scoreLeg = `<span style="display:inline-flex;align-items:center;gap:6px">
-      <span style="font-size:10px">0.0</span>
+      <span style="font-size:10px">0%</span>
       <span style="display:inline-block;width:120px;height:10px;border-radius:3px;background:linear-gradient(to right, rgb(33,120,171), #bbb 50%, rgb(204,85,85))"></span>
-      <span style="font-size:10px">1.0</span></span>`;
+      <span style="font-size:10px">100%</span></span>`;
     const labelLeg = [['pathogenic','#c55'],['likely path.','#DB8A48'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']]
       .map(([n,c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c}${n==='VUS'?';opacity:0.6':''}"></span> ${n}</span>`).join('');
 
@@ -465,7 +491,7 @@ function showLanding() {
       <h2>Variant Embedding Space</h2>
       <p>30k variants. Click a point to view its card.</p>
       <div style="margin-bottom:10px;display:flex;gap:4px;justify-content:center">
-        <button class="umap-toggle ${umapMode==='predicted'?'active':''}" data-mode="predicted" onclick="setUmapMode('predicted')">Effect score</button>
+        <button class="umap-toggle ${umapMode==='predicted'?'active':''}" data-mode="predicted" onclick="setUmapMode('predicted')">Pathogenicity</button>
         <button class="umap-toggle ${umapMode==='labeled'?'active':''}" data-mode="labeled" onclick="setUmapMode('labeled')">ClinVar label</button>
       </div>
       <div class="umap-wrap" id="umap-container"></div>
@@ -545,7 +571,7 @@ function renderUmap() {
       tooltip.style.display = 'block'; tooltip.style.left = (e.clientX+14)+'px'; tooltip.style.top = (e.clientY-10)+'px';
       tooltip.innerHTML = `<b>${geneStr[i]||'?'}</b> <span style="color:${c};font-weight:600">${lbl}</span><br>
         <span style="font-family:monospace;font-size:10px">${ids[i]}</span><br>
-        Effect score: <b style="color:${scoreColor(s)}">${s.toFixed(3)}</b>`;
+        Pathogenicity: <b style="color:${scoreColor(s)}">${(s * 100).toFixed(0)}%</b>`;
       canvas.style.cursor = 'pointer';
     } else { tooltip.style.display = 'none'; canvas.style.cursor = 'crosshair'; }
   }); };
@@ -561,15 +587,16 @@ function loadVariant(variantId) {
   searchResults.classList.remove('visible');
   tooltip.style.display = 'none';
   searchInput.value = variantId;
-  Promise.all([
-    fetch(`variants/${safeVariantId(variantId)}.json`).then(r => { if (!r.ok) throw new Error(); return r.json(); }),
-    globalReady,
-  ]).then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })
-    .catch(() => viewTransition(() => {
+  const variantReady = fetch(`variants/${safeVariantId(variantId)}.json`)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); });
+  Promise.all([variantReady, globalReady])
+    .then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })
+    .catch(e => {
+      console.error('loadVariant:', e);
       content.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--text-muted)">
         <div style="font-size:16px;font-weight:600;margin-bottom:4px">Variant not found</div>
         <div style="font-size:13px;font-family:monospace">${variantId}</div></div>`;
-    }));
+    });
 }
 
 function fetchInterpretation(v) {
@@ -578,16 +605,17 @@ function fetchInterpretation(v) {
   fetch(`/api/interpret/${encodeURIComponent(v.id)}`)
     .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
     .then(interp => {
-      if (!interp || interp.status !== 'ok') { container.remove(); return; }
+      if (!interp || interp.status !== 'ok') return;
       const cc = interp.confidence === 'high' ? 'conf-high' : interp.confidence === 'medium' ? 'conf-medium' : 'conf-low';
       container.innerHTML = `
-        <div class="section-title">Variant Description <span class="interp-confidence ${cc}">${interp.confidence} confidence</span></div>
+        <div class="section-title">Variant Interpretation <span class="interp-confidence ${cc}">${interp.confidence} confidence</span></div>
         <div class="interp-summary">${interp.summary}</div>
         <div class="interp-mechanism"><b>Mechanism:</b> ${interp.mechanism}</div>
         <div class="section-title" style="margin-top:12px;font-size:11px">Key Evidence</div>
         <ul class="interp-evidence">${interp.key_evidence.map(e => `<li>${e}</li>`).join('')}</ul>
         <div style="font-size:10px;color:var(--text-muted);margin-top:8px">Generated by ${interp.model || 'Claude'}</div>`;
-    }).catch(() => { container.remove(); });
+      container.style.display = '';
+    }).catch(() => {});
 }
 
 function renderVariant(v) {
@@ -599,7 +627,7 @@ function renderVariant(v) {
   const hgvsc = v.hgvsc ? v.hgvsc.split(':').pop() : null;
   const posFormatted = v.pos != null ? v.pos.toLocaleString() : '?';
   const exonStr = v.exon ? `exon ${v.exon}` : '';
-  const domainStr = v.domains ? v.domains.slice(0, 2).map(d => d.name || d.id).join(', ') : '';
+  const domainStr = Array.isArray(v.domains) ? v.domains.slice(0, 2).map(d => d.name || d.id).join(', ') : '';
   const contextParts = [humanConsequence(v.consequence), exonStr, domainStr].filter(Boolean);
 
   // gnomAD frequency formatting
@@ -658,72 +686,53 @@ function renderVariant(v) {
         </div>
       </div>
       <div class="verdict-score">
-        <div class="score-label">Variant Effect Score</div>
-        <div class="number" style="color:${scoreColor(v.score)}">${v.score.toFixed(3)}</div>
+        <div class="score-label">Predicted Pathogenicity</div>
+        <div class="number" style="color:${scoreColor(v.score)}">${(v.score * 100).toFixed(0)}%</div>
       </div>
     </div>`;
 
-  // --- AI Interpretation (on-demand, at the top) ---
-  html += `<div id="interp-container" class="card interp-card">
-    <div class="section-title">Variant Description</div>
-    <div class="interp-loading"><div class="interp-spinner"></div> Generating interpretation...</div>
-  </div>`;
+  // --- AI Interpretation (on-demand via serve.py, hidden until ready) ---
+  html += `<div id="interp-container" class="card interp-card" style="display:none"></div>`;
   // --- Flat lookups for predictors card ---
   const gt = v.gt || {};
   const effLookup = v.effect || {};
 
   // --- Score Attribution (above predictors) ---
   const attr = v.attribution;
-  if (attr?.effect?.length || attr?.disruption?.length) {
-    const cColor = c => c > 0 ? '#c55' : '#27a';
-    const allItems = [...attr.effect, ...attr.disruption];
-    const maxC = allItems.reduce((m, h) => Math.max(m, Math.abs(h.contribution)), 0.01);
-    const n_shown = allItems.length;
-    const featureTotal = attr.logit != null ? attr.logit - (attr.intercept || 0) : null;
-    const shown_sum = allItems.reduce((s, h) => s + h.contribution, 0);
-    const other = featureTotal != null ? featureTotal - shown_sum : null;
-
-    function contribRow(item) {
-      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-      const c = item.contribution;
-      const barW = Math.abs(c) / maxC * 100;
-      const pct = featureTotal ? Math.abs(c / featureTotal * 100).toFixed(0) : '';
-      return `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${item.score},this,null)">
-        <div class="profile-label">${name}</div>
-        <div class="profile-bar-container">
-          <div style="width:${barW}%;height:100%;background:${cColor(c)};border-radius:3px;opacity:0.65"></div>
-        </div>
-        <div style="width:45px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:${cColor(c)};flex-shrink:0">${pct}%</div>
-      </div>`;
-    }
+  const attrHeads = (attr?.heads || [...(attr?.effect || []), ...(attr?.disruption || [])]).sort((a, b) => (b.coefficient || Math.abs(b.contribution || 0)) - (a.coefficient || Math.abs(a.contribution || 0)));
+  if (attrHeads.length) {
+    const maxC = attrHeads.reduce((m, h) => Math.max(m, h.coefficient || Math.abs(h.contribution || 0)), 0.01);
 
     html += `<div class="card"><div class="section-title">Score Attribution</div>
-      <div class="profile-legend">
-        Feature contributions to pathogenicity: <span style="color:#c55">pathogenic</span>, <span style="color:#27a">protective</span>
-      </div>`;
+      <div class="profile-legend">Biological features explaining the pathogenicity prediction</div>`;
 
-    if (attr.effect?.length) {
-      const sorted = [...attr.effect].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-      html += `<div class="profile-group"><div class="profile-group-title">Predicted properties</div>`;
-      html += sorted.map(contribRow).join('');
-      html += `</div>`;
-    }
-
-    if (attr.disruption?.length) {
-      const sorted = [...attr.disruption].sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-      html += `<div class="profile-group"><div class="profile-group-title">Mutation impact</div>`;
-      html += sorted.map(contribRow).join('');
-      html += `</div>`;
-    }
-
-    // Summary line
-    if (featureTotal != null) {
-      const otherPct = Math.abs(other / featureTotal * 100).toFixed(0);
-      html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0 0;border-top:1px solid var(--border);display:flex;gap:16px">
-        <span>Other ${attr.n_heads - n_shown} heads: <span style="color:${cColor(other)}">${otherPct}%</span></span>
-        <span>Baseline: <span style="color:${cColor(attr.intercept)}">${Math.abs(attr.intercept / attr.logit * 100).toFixed(0)}%</span></span>
+    for (const item of attrHeads) {
+      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
+      const c = item.coefficient ?? item.contribution ?? 0;
+      const barW = c / maxC * 100;
+      const pct = (c * 100).toFixed(0);
+      const d = v.disruption?.[item.name] ?? null;
+      let deltaText = '';
+      if (d !== null) {
+        const dc = headColor(item.name, d, true);
+        deltaText = `<span style="background:#f0ebe4;padding:1px 5px;border-radius:3px;color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(2)}</span>`;
+      }
+      const chartVal = d ?? (v.effect?.[item.name] ?? c);
+      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${chartVal},this,null)">
+        <div class="profile-label">${name}</div>
+        <div style="width:65px;flex-shrink:0;text-align:right;font-size:9px;font-weight:600;font-family:monospace;margin-right:6px">${deltaText}</div>
+        <div class="profile-bar-container">
+          <div style="width:${barW}%;height:100%;background:var(--accent);border-radius:3px;opacity:0.65"></div>
+        </div>
+        <div style="width:40px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:var(--text-secondary);flex-shrink:0">${pct}%</div>
       </div>`;
     }
+    const shownPct = attrHeads.reduce((s, h) => s + (h.coefficient ?? 0), 0) * 100;
+    const otherPct = 100 - shownPct;
+    const summary = shownPct > 100
+      ? `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads counteract <b>${Math.abs(otherPct).toFixed(0)}%</b>`
+      : `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads contribute <b>${otherPct.toFixed(0)}%</b>`;
+    html += `<div style="font-size:12px;color:var(--text-secondary);padding:8px 0 0;border-top:1px solid var(--border)">${summary}</div>`;
     html += `</div>`;
   }
 
@@ -779,8 +788,8 @@ function renderVariant(v) {
     const cls = nb.label.includes('pathogenic') ? 'pathogenic' : nb.label.includes('benign') ? 'benign' : '';
     html += `<tr class="${cls}" style="cursor:pointer" onclick="navigate('variant/${nb.id}')">
       <td class="mono" title="${nb.id}">${truncate(nb.id)}</td><td>${nb.gene}</td><td>${humanConsequence(nb.consequence)}</td>
-      <td>${labelBadge(nb.label)}</td><td class="mono">${nb.score.toFixed(3)}</td>
-      <td class="mono">${nb.similarity.toFixed(3)}</td></tr>`;
+      <td>${labelBadge(nb.label)}</td><td class="mono">${(nb.score * 100).toFixed(0)}%</td>
+      <td class="mono">${(nb.similarity * 100).toFixed(0)}%</td></tr>`;
   }
   html += '</table></div>';
   html += `<div class="card"><div class="section-title">Score Distribution</div>
@@ -791,21 +800,21 @@ function renderVariant(v) {
     let rawHtml = '';
     rawHtml += `<div class="section-title" style="margin-top:8px">Disruption Profile</div>
       <div class="profile-legend">
-        <span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:20px;height:10px;background:#bbb;opacity:.5;border-radius:2px;position:relative"><span style="position:absolute;top:2px;left:0;width:14px;height:6px;background:#bbb;border-radius:1px"></span></span> ref / var</span>
-        <span style="color:var(--negative)">\u2212 disrupted</span>
-        <span style="color:var(--positive)">+ gained</span>
-        <span><span style="display:inline-block;width:2px;height:10px;background:#333;vertical-align:middle;margin-right:2px"></span> database</span>
+        How the mutation changes each feature (variant \u2212 reference).
+        <span style="color:#c55">\u25C0 disrupted</span>
+        <span style="color:#bbb">\u2502 zero</span>
+        <span style="color:#27a">gained \u25B6</span>
       </div>`;
-    for (const [gname, keys] of Object.entries(globalData.heads.disruption)) {
+    for (const [gname, keys] of Object.entries(globalData?.heads?.disruption || {})) {
       const items = keys
-        .filter(k => v.disruption?.[k])
-        .map(k => ({key: k, ref: v.disruption[k][0], var: v.disruption[k][1], gt: v.gt?.[k]}))
-        .sort((a, b) => Math.abs(b.var - b.ref) - Math.abs(a.var - a.ref));
+        .filter(k => v.disruption?.[k] != null)
+        .map(k => ({key: k, delta: v.disruption[k], gt: v.gt?.[k]}))
+        .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
       if (items.length) rawHtml += renderGroup(gname, items, disruptionRow, 'ref');
     }
     rawHtml += `<div class="section-title" style="margin-top:16px">Variant Effects</div>
       <div class="profile-legend">How this mutation changes biological and clinical features</div>`;
-    for (const [gname, keys] of Object.entries(globalData.heads.effect)) {
+    for (const [gname, keys] of Object.entries(globalData?.heads?.effect || {})) {
       const items = keys
         .filter(k => v.effect?.[k] != null)
         .map(k => ({key: k, val: v.effect[k], gt: v.gt?.[k]}))
@@ -854,7 +863,7 @@ function renderDistChart(v) {
   const mb = Math.min(bins - 1, Math.max(0, Math.floor(v.score * bins)));
   distChart = new Chart(el.getContext('2d'), {
     type: 'bar',
-    data: { labels: Array.from({length: bins}, (_, i) => (i / bins).toFixed(2)),
+    data: { labels: Array.from({length: bins}, (_, i) => `${(i / bins * 100).toFixed(0)}%`),
       datasets: [
         { label: 'Benign', data: distributionData.benign, backgroundColor: 'rgba(34,119,170,0.4)', borderWidth: 0 },
         { label: 'Pathogenic', data: distributionData.pathogenic, backgroundColor: 'rgba(204,85,85,0.4)', borderWidth: 0 },

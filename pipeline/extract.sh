@@ -1,11 +1,9 @@
 #!/bin/bash
-# SLURM wrapper for scripts/extract.py (3-view embeddings + scores).
+# SLURM wrapper for pipeline/extract.py (3-view embeddings + scores).
 #
 # Usage:
-#   EXTRACT=$(sbatch --parsable --array=0-7 scripts/extract.sh \
-#       --probe /path/to/probe \
-#       --activations /path/to/storage)
-#   sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh /path/to/storage/probe_name
+#   sbatch --parsable --array=0-7 pipeline/extract.sh \
+#       --probe /path/to/probe --activations /path/to/storage
 
 #SBATCH --job-name=extract
 #SBATCH --gres=gpu:1
@@ -18,19 +16,9 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs/extract
 
-N_SHARDS="${SLURM_ARRAY_TASK_COUNT:-1}"
+echo "=== Extract shard ${SLURM_ARRAY_TASK_ID}/${SLURM_ARRAY_TASK_COUNT:-1} on $(hostname) ==="
 
-echo "=== Extract ==="
-echo "Shard: ${SLURM_ARRAY_TASK_ID} / ${N_SHARDS}"
-echo "Node:  $(hostname)"
-echo "Start: $(date)"
-echo "Args:  $@"
-echo ""
-
-uv run python scripts/extract.py \
+PYTHONPATH=. uv run python pipeline/extract.py \
     --shard-id "${SLURM_ARRAY_TASK_ID}" \
-    --n-shards "${N_SHARDS}" \
+    --n-shards "${SLURM_ARRAY_TASK_COUNT:-1}" \
     "$@"
-
-echo ""
-echo "End: $(date)"
