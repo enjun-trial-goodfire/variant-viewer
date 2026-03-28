@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 import torch
 from loguru import logger
@@ -45,14 +44,14 @@ def _discover_heads(scores: pl.DataFrame) -> tuple[tuple[str, ...], tuple[str, .
     return diff, ref
 
 
-def _feature_matrix(df: pl.DataFrame, diff: tuple[str, ...], ref: tuple[str, ...]) -> np.ndarray:
-    """[N, p] float32 matrix: diff scores + ref-var deltas."""
-    parts = [np.nan_to_num(df.select([f"score_{h}" for h in diff]).to_numpy(), nan=0.5)]
+def _feature_matrix(df: pl.DataFrame, diff: tuple[str, ...], ref: tuple[str, ...]) -> torch.Tensor:
+    """[N, p] float32 tensor: diff scores + ref-var deltas."""
+    parts = [torch.nan_to_num(torch.from_numpy(df.select([f"score_{h}" for h in diff]).to_numpy()), nan=0.5)]
     if ref:
-        r = np.nan_to_num(df.select([f"ref_score_{h}" for h in ref]).to_numpy(), nan=0.5)
-        v = np.nan_to_num(df.select([f"var_score_{h}" for h in ref]).to_numpy(), nan=0.5)
+        r = torch.nan_to_num(torch.from_numpy(df.select([f"ref_score_{h}" for h in ref]).to_numpy()), nan=0.5)
+        v = torch.nan_to_num(torch.from_numpy(df.select([f"var_score_{h}" for h in ref]).to_numpy()), nan=0.5)
         parts.append(v - r)
-    return np.hstack(parts).astype(np.float32)
+    return torch.cat(parts, dim=1).float()
 
 
 class AttributionModel:
@@ -88,20 +87,21 @@ class AttributionModel:
         logger.info(f"Attribution: {len(diff)} effect + {len(ref)} disruption heads")
 
         features = _feature_matrix(joined, diff, ref)
-        raw_score = np.clip(joined["score_pathogenic"].to_numpy(), 1e-6, 1 - 1e-6)
-        target = np.log(raw_score / (1 - raw_score)).astype(np.float32)
-        train = (joined["split"] == "train").to_numpy()
+        raw_score = torch.clamp(torch.tensor(joined["score_pathogenic"].to_list(), dtype=torch.float32), 1e-6, 1 - 1e-6)
+        target = torch.log(raw_score / (1 - raw_score))
+        train_mask = torch.tensor((joined["split"] == "train").to_list(), dtype=torch.bool)
 
-        x = torch.from_numpy(features).to(device)
-        y = torch.from_numpy(target).to(device)
+        x = features.to(device)
+        y = target.to(device)
         p = x.size(1)
-        x_tr, y_tr = x[train], y[train]
+        x_tr, y_tr = x[train_mask], y[train_mask]
         beta = torch.linalg.solve(
             x_tr.T @ x_tr + torch.eye(p, device=device),
             x_tr.T @ (y_tr - y_tr.mean()),
         )
         intercept = (y_tr.mean() - x_tr.mean(0) @ beta).item()
-        test_r2 = 1 - ((y[~train] - x[~train] @ beta - intercept) ** 2).sum() / ((y[~train] - y[~train].mean()) ** 2).sum()
+        test_mask = ~train_mask
+        test_r2 = 1 - ((y[test_mask] - x[test_mask] @ beta - intercept) ** 2).sum() / ((y[test_mask] - y[test_mask].mean()) ** 2).sum()
         logger.info(f"Ridge R²={test_r2:.4f}")
 
         return cls(beta=beta.cpu(), intercept=intercept, head_names=names,
@@ -118,37 +118,64 @@ class AttributionModel:
         """
         features = _feature_matrix(scores, self.diff_heads, self.ref_heads)
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        x = torch.from_numpy(features).to(device)
+        x = features.to(device)
         beta_d = self.beta.to(device)
         contrib = x * beta_d[None, :]
-        logits = (contrib.sum(1) + self.intercept).cpu().numpy().round(4)
+        logits = (contrib.sum(1) + self.intercept).cpu()
 
         n_eff = len(self.diff_heads)
-        eff_topk = torch.topk(contrib[:, :n_eff].abs(), min(k_effect, n_eff), dim=1).indices
-        dis_topk = torch.topk(contrib[:, n_eff:].abs(), min(k_disruption, contrib.size(1) - n_eff), dim=1).indices + n_eff
+        n_dis = contrib.size(1) - n_eff
+        k_e = min(k_effect, n_eff)
+        k_d = min(k_disruption, n_dis)
 
-        eff_topk = eff_topk.cpu().numpy()
-        dis_topk = dis_topk.cpu().numpy()
-        contrib_cpu = contrib.cpu().numpy()
-        names = self.head_names
+        eff_idx = torch.topk(contrib[:, :n_eff].abs(), k_e, dim=1).indices.cpu()
+        dis_idx = torch.topk(contrib[:, n_eff:].abs(), k_d, dim=1).indices.cpu()
 
-        rows = []
-        for i in range(x.size(0)):
-            effects = [
-                {"name": names[h][0], "score": round(float(features[i, h]), 4),
-                 "contribution": round(float(contrib_cpu[i, h]), 4)}
-                for h in eff_topk[i] if abs(contrib_cpu[i, h]) > 1e-4
-            ]
-            disruptions = [
-                {"name": names[h][0], "score": round(float(features[i, h]), 4),
-                 "contribution": round(float(contrib_cpu[i, h]), 4)}
-                for h in dis_topk[i] if abs(contrib_cpu[i, h]) > 1e-4
-            ]
-            rows.append(json.dumps({"effect": effects, "disruption": disruptions}))
+        contrib_cpu = contrib.cpu()
+        features_cpu = features
+
+        # Build name lookup: index → head name
+        names = tuple(n[0] for n in self.head_names)
+
+        # Gather top-k values: [N, k]
+        eff_contrib = torch.gather(contrib_cpu[:, :n_eff], 1, eff_idx)
+        eff_scores = torch.gather(features_cpu[:, :n_eff], 1, eff_idx)
+        dis_contrib = torch.gather(contrib_cpu[:, n_eff:], 1, dis_idx)
+        dis_scores = torch.gather(features_cpu[:, n_eff:], 1, dis_idx)
+
+        # Threshold mask: only include heads with |contribution| > 1e-4
+        eff_mask = eff_contrib.abs() > 1e-4
+        dis_mask = dis_contrib.abs() > 1e-4
+
+        # Build JSON strings vectorized per row
+        eff_idx_list = eff_idx.tolist()
+        dis_idx_list = dis_idx.tolist()
+        eff_contrib_list = eff_contrib.tolist()
+        dis_contrib_list = dis_contrib.tolist()
+        eff_scores_list = eff_scores.tolist()
+        dis_scores_list = dis_scores.tolist()
+        eff_mask_list = eff_mask.tolist()
+        dis_mask_list = dis_mask.tolist()
+
+        rows = [
+            json.dumps({
+                "effect": [
+                    {"name": names[eff_idx_list[i][j]], "score": round(eff_scores_list[i][j], 4),
+                     "contribution": round(eff_contrib_list[i][j], 4)}
+                    for j in range(k_e) if eff_mask_list[i][j]
+                ],
+                "disruption": [
+                    {"name": names[n_eff + dis_idx_list[i][j]], "score": round(dis_scores_list[i][j], 4),
+                     "contribution": round(dis_contrib_list[i][j], 4)}
+                    for j in range(k_d) if dis_mask_list[i][j]
+                ],
+            })
+            for i in range(x.size(0))
+        ]
 
         return pl.DataFrame({
             "variant_id": scores["variant_id"],
-            "attribution_logit": logits,
+            "attribution_logit": logits.round(decimals=4).tolist(),
             "attribution_json": rows,
         })
 

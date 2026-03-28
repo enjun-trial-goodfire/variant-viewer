@@ -82,31 +82,18 @@ def build_prompt(v: dict) -> str:
         lines.append(cal)
     lines.append("")
 
-    # Attribution heads — normalize both schemas to a flat list with {name, kind, weight}
+    # Attribution heads (v1 schema: {"effect": [...], "disruption": [...]})
     attr = v.get("attribution") or {}
     disruption = v.get("disruption", {})
     effect = v.get("effect", {})
     gt = v.get("gt", {})
 
-    # Schema v2: {"heads": [{name, kind, coefficient}, ...]}
-    # Schema v1: {"effect": [{name, score, contribution}, ...], "disruption": [...]}
-    if "heads" in attr:
-        attr_heads = attr["heads"]
-        weight_key = "coefficient"
-    elif "effect" in attr or "disruption" in attr:
-        attr_heads = [
-            {**h, "kind": "effect", "coefficient": h.get("contribution", 0)}
-            for h in attr.get("effect", [])
-        ] + [
-            {**h, "kind": "disruption", "coefficient": h.get("contribution", 0)}
-            for h in attr.get("disruption", [])
-        ]
-        weight_key = "coefficient"
-    else:
-        attr_heads = []
-        weight_key = "coefficient"
+    attr_heads = [
+        *[{**h, "kind": "effect"} for h in attr.get("effect", [])],
+        *[{**h, "kind": "disruption"} for h in attr.get("disruption", [])],
+    ]
 
-    top = sorted(attr_heads, key=lambda h: abs(h.get(weight_key, 0)), reverse=True)[:15]
+    top = sorted(attr_heads, key=lambda h: abs(h.get("contribution", 0)), reverse=True)[:15]
     if top:
         lines.append("### Attribution (features driving the prediction, ranked by importance)")
         lines.append("| Feature | Type | Weight | Value | Ref\u2192Var (\u0394) | Database |")
@@ -114,7 +101,7 @@ def build_prompt(v: dict) -> str:
         for h in top:
             name = h["name"]
             kind = h.get("kind", "?")
-            coeff = h.get(weight_key, 0)
+            coeff = h.get("contribution", 0)
             val_str, delta_str = "\u2014", "\u2014"
             gt_val = gt.get(name)
             gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else "\u2014"

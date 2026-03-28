@@ -10,6 +10,7 @@ Usage:
 """
 
 import gzip
+import re
 import urllib.request
 from pathlib import Path
 
@@ -38,6 +39,9 @@ def _download(url: str, dest: Path) -> Path:
 
 def _read_tsv_gz(path: Path) -> pl.DataFrame:
     """Read ClinVar gzipped TSV via pandas (handles ragged/malformed rows).
+
+    Uses pandas instead of polars because ClinVar's ragged TSV format causes
+    polars' CSV parser to fail. pandas' on_bad_lines="skip" handles this.
 
     ClinVar files have # comment lines. The LAST # line is the header.
     variant_summary uses #AlleleID (single #), submission_summary uses ## + #.
@@ -106,7 +110,6 @@ def parse_submission_summary(path: Path) -> pl.DataFrame:
 
 def _extract_acmg_codes(text: str) -> str:
     """Extract ACMG/AMP criteria codes from free text."""
-    import re
     pattern = r"\b(PVS1|PS[1-4]|PM[1-6]|PP[1-5]|BA1|BS[1-4]|BP[1-7])(?:_(?:Strong|Moderate|Supporting|VeryStrong|MOD|SUP|STR))?\b"
     codes = re.findall(pattern, text, re.IGNORECASE)
     # Also check for underscore-modified codes like PS2_MOD

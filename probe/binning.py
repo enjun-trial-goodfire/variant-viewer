@@ -1,6 +1,5 @@
 """Soft binning utilities for converting continuous values to categorical distributions."""
 import torch
-import torch.nn as nn
 import torch.nn.functional
 from torch import Tensor
 
@@ -62,40 +61,6 @@ def bins_to_continuous(logits: torch.Tensor, n_bins: int = 64) -> torch.Tensor:
     predictions = (probs * bin_centers.view(1, 1, -1)).sum(dim=-1)
 
     return predictions
-
-
-class SoftCrossEntropyLoss(nn.Module):
-    """Cross-entropy loss with soft targets for binned regression."""
-
-    def __init__(self, n_bins: int = 64, sigma: float = 0.1):
-        super().__init__()
-        self.n_bins = n_bins
-        self.sigma = sigma
-
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """Compute soft cross-entropy loss, masking NaN targets.
-
-        NaN targets are excluded from the loss computation. When no NaNs
-        are present, behavior is identical to a simple mean.
-        """
-        # Mask NaN targets before binning
-        mask = ~torch.isnan(targets)  # (batch, n_tracks)
-        targets = targets.nan_to_num(0.0)  # safe for create_soft_bins
-
-        # Convert targets to soft bins: (batch, n_tracks, n_bins)
-        soft_targets = create_soft_bins(targets, n_bins=self.n_bins, sigma=self.sigma)
-
-        # Reshape logits: (batch, n_tracks * n_bins) -> (batch, n_tracks, n_bins)
-        batch_size = logits.shape[0]
-        n_tracks = logits.shape[1] // self.n_bins
-        logits = logits.reshape(batch_size, n_tracks, self.n_bins)
-
-        # Cross-entropy with soft targets, masked for NaN entries
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-        per_track = -(soft_targets * log_probs).sum(dim=-1)  # (batch, n_tracks)
-        loss = (per_track * mask).sum() / mask.sum().clamp(min=1)
-
-        return loss
 
 
 def binned_regression_metrics(probe, x: torch.Tensor, y: torch.Tensor, n_bins: int = 64) -> dict:

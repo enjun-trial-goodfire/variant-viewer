@@ -1,10 +1,4 @@
 """Tests for Claude interpretation prompt building."""
-import sys
-from pathlib import Path
-
-# Add the variant-viewer root to sys.path so we can import prompts
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from prompts import build_prompt
 
 
@@ -34,11 +28,12 @@ def test_build_prompt_basic():
 
 def test_build_prompt_with_attribution():
     v = _fake_variant(attribution={
-        "heads": [
-            {"name": "phylop_100way", "kind": "disruption", "coefficient": 0.5},
-            {"name": "cadd_c", "kind": "effect", "coefficient": 0.3},
+        "effect": [
+            {"name": "cadd_c", "score": 0.8, "contribution": 0.3},
         ],
-        "explained": 0.8,
+        "disruption": [
+            {"name": "phylop_100way", "score": 0.7, "contribution": 0.5},
+        ],
     })
     prompt = build_prompt(v)
     assert "Attribution" in prompt

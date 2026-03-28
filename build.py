@@ -35,10 +35,8 @@ from goodfire_core.storage import ActivationDataset, FilesystemStorage
 
 from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES, LABEL_TO_IDX
 from display import auto_group, display_name
-from paths import (
-    ARTIFACTS, MAYO_DATA, sanitize_vid,
-    load_vep, load_domain_names, resolve_domains, load_metadata,
-)
+from paths import ARTIFACTS, MAYO_DATA, sanitize_vid
+from loaders import load_vep, load_domain_names, resolve_domains, load_metadata
 
 ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations.feather"
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
@@ -55,11 +53,26 @@ VEP_COLS = (
     "vep_gnomade_eas", "vep_gnomade_fin", "vep_gnomade_nfe", "vep_gnomade_sas",
 )
 
+
 def _parse_attribution(json_str: str | None) -> dict:
-    """Parse attribution JSON."""
+    """Parse attribution JSON, normalizing v2 schema to v1.
+
+    v1 (current): {"effect": [{name, score, contribution}, ...], "disruption": [...]}
+    v2 (legacy):  {"heads": [{name, kind, coefficient}, ...]}
+
+    Always returns v1 format.
+    """
     if not json_str:
         return {}
-    return orjson.loads(json_str)
+    attr = orjson.loads(json_str)
+    if "heads" not in attr:
+        return attr
+    # Normalize v2 -> v1
+    effect, disruption = [], []
+    for h in attr["heads"]:
+        entry = {"name": h["name"], "score": h.get("score", 0), "contribution": h.get("coefficient", 0)}
+        (effect if h.get("kind") == "effect" else disruption).append(entry)
+    return {"effect": effect, "disruption": disruption}
 
 
 def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
@@ -72,50 +85,41 @@ def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
     ).tolist()
 
 
-# ── Main build ───────────────────────────────────────────────────────────
+# ── Head classification ─────────────────────────────────────────────────
 
-def main(
-    output: Path | None = None,
-    sync: bool = False,
-    umap: bool = False,
-    neighbors: bool = False,
-) -> Path:
-    """Build the variant viewer static site.
 
-    Args:
-        output: Output directory for rsync (default: /tmp staging only).
-        sync: If True, rsync staging to output directory.
-        umap: Compute UMAP embedding (~40s).
-        neighbors: Compute nearest neighbors (requires GPU).
+def _classify_heads(
+    df: pl.DataFrame, cfg: dict,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Classify score columns into disruption/effect head groups from probe config.
 
     Returns:
-        Path to the staging directory.
+        (ref_cols, var_cols, eff_cols, gt_cols, disruption_heads, effect_heads)
     """
+    # Support both old (ref_heads/diff_heads) and new (disruption_heads/effect_heads) config keys
+    disruption_set = set(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
+    effect_set = set(cfg.get("effect_heads", cfg.get("diff_heads", ())))
 
-    t0 = time.time()
+    ref_cols = tuple(sorted(c for c in df.columns if c.startswith("ref_score_") and c[10:] in disruption_set))
+    var_cols = tuple(sorted(c for c in df.columns if c.startswith("var_score_") and c[10:] in disruption_set))
+    eff_cols = tuple(sorted(c for c in df.columns if c.startswith("score_") and c != "score_pathogenic" and c[6:] in effect_set))
+    gt_cols = tuple(sorted(c for c in df.columns if c.startswith("gt_") and df[c].dtype in (pl.Float32, pl.Float64)))
 
-    def _t(msg: str) -> None:
-        logger.info(f"[{time.time() - t0:.1f}s] {msg}")
+    disruption_heads = tuple(c[10:] for c in ref_cols)
+    effect_heads = tuple(c[6:] for c in eff_cols)
 
-    # ── Validate inputs ──────────────────────────────────────────────────
-    missing = []
-    for path, desc in [
-        (LABELED / PROBE / "scores.feather", f"Labeled scores ({PROBE})"),
-        (VUS / PROBE / "scores.feather", f"VUS scores ({PROBE})"),
-        (ANNOTATIONS, "Annotations"),
-        (MAYO_DATA / "clinvar" / "deconfounded-full" / "metadata.feather", "Labeled metadata"),
-        (MAYO_DATA / "gencode" / "genes.feather", "GENCODE genes"),
-    ]:
-        if not path.exists():
-            missing.append(f"  {desc}: {path}")
-    if missing:
-        raise FileNotFoundError(
-            f"Missing required data files:\n" + "\n".join(missing) + "\n\nRun: uv run vv check"
-        )
+    return ref_cols, var_cols, eff_cols, gt_cols, disruption_heads, effect_heads
 
-    # ── Load ─────────────────────────────────────────────────────────────
-    _t("Loading...")
 
+# ── Data loading ────────────────────────────────────────────────────────
+
+
+def load_data() -> tuple[pl.DataFrame, dict]:
+    """Load scores, join metadata, VEP, annotations, submissions. Returns unified DataFrame and probe config.
+
+    Returns:
+        (df, cfg) where df has all scores rounded/filled and cfg is the probe config dict.
+    """
     scores_l = pl.read_ipc(str(LABELED / PROBE / "scores.feather"))
     scores_v = pl.read_ipc(str(VUS / PROBE / "scores.feather"))
     meta_l = load_metadata("deconfounded-full").select(
@@ -135,19 +139,17 @@ def main(
 
     # ref/alt in the raw ClinVar source are already VCF forward-strand alleles
     # (ref matches FASTA at 0-based pos). No strand complementing needed.
-    # Only need 0-based → 1-based position conversion for external links.
     df = df.with_columns(
-        (pl.col("pos") + 1).alias("vcf_pos"),  # 0-based → 1-based
+        (pl.col("pos") + 1).alias("vcf_pos"),  # 0-based -> 1-based
     )
 
-    # Decode integer predictions → strings (backward compat for older probes)
+    # Decode integer predictions -> strings (backward compat for older probes)
     if "pred_consequence" in df.columns and df["pred_consequence"].dtype in (pl.Int32, pl.Int64, pl.UInt32):
         df = df.with_columns(
             pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
             pl.col("pred_aa_swap").replace_strict(dict(enumerate(AA_SWAP_CLASSES)), default=None).alias("substitution"),
         )
     elif "pred_consequence" in df.columns:
-        # Already strings (new extract.py writes labels directly)
         df = df.rename({"pred_consequence": "consequence", "pred_aa_swap": "substitution"})
 
     gt = pl.read_ipc(ANNOTATIONS)
@@ -157,7 +159,6 @@ def main(
     )
 
     # VEP annotations (HGVS, gnomAD frequencies, domains, etc.)
-    _t("Loading VEP annotations...")
     vep = load_vep(VARIANT_ANN_DIR, VEP_COLS)
     df = df.join(vep, on="variant_id", how="left")
 
@@ -170,29 +171,15 @@ def main(
             "n_submissions", "last_evaluated", "origin",
         )
         df = df.join(subs, on="allele_id", how="left")
-        _t(f"Joined ClinVar submissions ({subs.height:,} records)")
+        logger.info(f"Joined ClinVar submissions ({subs.height:,} records)")
     else:
         logger.warning(f"No submissions data at {submissions_path}, run clinvar_submissions.py first")
 
-    domain_cache = load_domain_names()
-    _t(f"{df.height:,} variants loaded, {len(domain_cache):,} domain names cached")
-
-    # ── Head classification ──────────────────────────────────────────────
+    # Probe config
     cfg = json.loads((LABELED / PROBE / "config.json").read_text())
-    # Support both old (ref_heads/diff_heads) and new (disruption_heads/effect_heads) config keys
-    disruption_set = set(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
-    effect_set = set(cfg.get("effect_heads", cfg.get("diff_heads", ())))
 
-    ref_cols = sorted(c for c in df.columns if c.startswith("ref_score_") and c[10:] in disruption_set)
-    var_cols = sorted(c for c in df.columns if c.startswith("var_score_") and c[10:] in disruption_set)
-    eff_cols = sorted(c for c in df.columns if c.startswith("score_") and c != "score_pathogenic" and c[6:] in effect_set)
-    gt_cols = sorted(c for c in df.columns if c.startswith("gt_") and df[c].dtype in (pl.Float32, pl.Float64))
-
-    disruption_heads = tuple(c[10:] for c in ref_cols)
-    effect_heads = tuple(c[6:] for c in eff_cols)
-    _t(f"{len(disruption_heads)} disruption + {len(effect_heads)} effect heads")
-
-    # ── Prepare data (round, fill nulls, NaN→null) ──────────────────────
+    # Round scores and fill nulls
+    ref_cols, var_cols, eff_cols, gt_cols, _, _ = _classify_heads(df, cfg)
     score_cols = ref_cols + var_cols + eff_cols + gt_cols
     float_score_cols = [c for c in score_cols if df[c].dtype in (pl.Float32, pl.Float64)]
 
@@ -207,132 +194,260 @@ def main(
         pl.col("score_pathogenic").fill_null(0.0).round(4),
     )
 
-    # ── Embeddings + neighbors ───────────────────────────────────────────
-    _t("Loading embeddings...")
+    return df, cfg
 
-    def load_emb(path: Path) -> tuple[torch.Tensor, list[str]]:
-        storage = FilesystemStorage(path / PROBE)
-        dataset = ActivationDataset(storage, "embeddings", batch_size=4096, include_provenance=True)
-        embeddings, ids = [], []
-        for batch in dataset.training_iterator(device="cpu", n_epochs=1, shuffle=False, drop_last=False):
-            # Extract diff-view embedding (first d_h^2 elements) for UMAP/neighbors
-            flat = batch.acts.flatten(1)
-            d_h2 = cfg["d_hidden"] ** 2
-            embeddings.append(flat[:, :d_h2])
-            ids.extend(batch.sequence_ids)
-        return torch.cat(embeddings), ids
 
-    if not neighbors and not umap:
-        _t("Skipping embeddings (use --neighbors or --umap to enable)")
-        nb_map = {}
-        emb_df = None
-    else:
-        emb_l, ids_l = load_emb(LABELED)
-        emb_v, ids_v = load_emb(VUS)
-        emb = torch.nn.functional.normalize(torch.cat([emb_l, emb_v]).float(), dim=1)
-        emb_ids = ids_l + ids_v
-        n_emb = len(emb_ids)
+# ── Embeddings ──────────────────────────────────────────────────────────
 
-    if not neighbors:
-        _t("Skipping neighbors (use --neighbors to enable)")
-        nb_map = {}
-    else:
-        _t("GPU cosine similarity...")
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        emb_gpu = emb.to(device, non_blocking=True)
-        topk_indices, topk_values = [], []
-        for start in range(0, n_emb, 4096):
-            end = min(start + 4096, n_emb)
-            similarity = emb_gpu[start:end] @ emb_gpu.T
-            similarity[torch.arange(end - start, device=device), torch.arange(start, end, device=device)] = -1
-            topk = similarity.topk(K_NEIGHBORS, dim=1)
-            topk_indices.append(topk.indices.cpu())
-            topk_values.append(topk.values.cpu())
-        topk_i = torch.cat(topk_indices).numpy()
-        topk_v = torch.cat(topk_values).numpy()
-        del emb_gpu
 
-    if neighbors:
-        _t("Building neighbor table...")
-        emb_df = (
-            pl.DataFrame({"emb_i": range(n_emb), "variant_id": emb_ids})
-            .join(df.select(
-                "variant_id", pl.col("gene_name").alias("gene"),
-                "consequence", "label", pl.col("score_pathogenic").alias("score"),
-            ), on="variant_id", how="left")
-            .with_columns(
-                pl.col("gene").fill_null("?"),
-                pl.col("consequence").fill_null("?"),
-                pl.col("label").fill_null("?"),
-                pl.col("score").fill_null(0.0),
-            )
+def _load_emb(path: Path, d_hidden: int) -> tuple[torch.Tensor, list[str]]:
+    """Load embeddings from an ActivationDataset, extracting the diff-view slice."""
+    storage = FilesystemStorage(path / PROBE)
+    dataset = ActivationDataset(storage, "embeddings", batch_size=4096, include_provenance=True)
+    embeddings, ids = [], []
+    d_h2 = d_hidden ** 2
+    for batch in dataset.training_iterator(device="cpu", n_epochs=1, shuffle=False, drop_last=False):
+        flat = batch.acts.flatten(1)
+        embeddings.append(flat[:, :d_h2])
+        ids.extend(batch.sequence_ids)
+    return torch.cat(embeddings), ids
+
+
+def _load_all_embeddings(cfg: dict) -> tuple[torch.Tensor, list[str]]:
+    """Load and L2-normalize embeddings from labeled + VUS datasets."""
+    emb_l, ids_l = _load_emb(LABELED, cfg["d_hidden"])
+    emb_v, ids_v = _load_emb(VUS, cfg["d_hidden"])
+    emb = torch.nn.functional.normalize(torch.cat([emb_l, emb_v]).float(), dim=1)
+    return emb, ids_l + ids_v
+
+
+# ── Neighbors ───────────────────────────────────────────────────────────
+
+
+def compute_neighbors(
+    emb: torch.Tensor, emb_ids: list[str], df: pl.DataFrame, k: int = 10,
+) -> dict[str, list]:
+    """GPU cosine similarity + polars neighbor table.
+
+    Args:
+        emb: L2-normalized embeddings, shape (n, d).
+        emb_ids: Variant IDs corresponding to rows of emb.
+        df: Unified DataFrame with gene_name, consequence, label, score_pathogenic.
+        k: Number of nearest neighbors per variant.
+
+    Returns:
+        Dict mapping variant_id to list of neighbor dicts.
+    """
+    n = len(emb_ids)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    emb_gpu = emb.to(device, non_blocking=True)
+
+    topk_indices, topk_values = [], []
+    for start in range(0, n, 4096):
+        end = min(start + 4096, n)
+        similarity = emb_gpu[start:end] @ emb_gpu.T
+        similarity[torch.arange(end - start, device=device), torch.arange(start, end, device=device)] = -1
+        topk = similarity.topk(k, dim=1)
+        topk_indices.append(topk.indices.cpu())
+        topk_values.append(topk.values.cpu())
+    topk_i = torch.cat(topk_indices).numpy()
+    topk_v = torch.cat(topk_values).numpy()
+    del emb_gpu
+
+    emb_df = (
+        pl.DataFrame({"emb_i": range(n), "variant_id": emb_ids})
+        .join(df.select(
+            "variant_id", pl.col("gene_name").alias("gene"),
+            "consequence", "label", pl.col("score_pathogenic").alias("score"),
+        ), on="variant_id", how="left")
+        .with_columns(
+            pl.col("gene").fill_null("?"),
+            pl.col("consequence").fill_null("?"),
+            pl.col("label").fill_null("?"),
+            pl.col("score").fill_null(0.0),
         )
+    )
 
-        edges = pl.DataFrame({
-            "src_i": torch.arange(n_emb).repeat_interleave(K_NEIGHBORS).to(torch.int32).numpy(),
-            "dst_i": topk_i.ravel().astype(np.int32),
-            "similarity": topk_v.ravel().round(4).astype(np.float32),
-        })
-        nb = (edges
-              .join(emb_df.select(
-                  pl.col("emb_i").alias("dst_i"), pl.col("variant_id").alias("id"),
-                  "gene", "consequence", "label", "score",
-              ), on="dst_i", how="left")
-              .join(emb_df.select(
-                  pl.col("emb_i").alias("src_i"), pl.col("variant_id").alias("src_vid"),
-              ), on="src_i", how="left")
-              .drop("src_i", "dst_i"))
+    edges = pl.DataFrame({
+        "src_i": torch.arange(n).repeat_interleave(k).to(torch.int32).numpy(),
+        "dst_i": topk_i.ravel().astype(np.int32),
+        "similarity": topk_v.ravel().round(4).astype(np.float32),
+    })
+    nb = (edges
+          .join(emb_df.select(
+              pl.col("emb_i").alias("dst_i"), pl.col("variant_id").alias("id"),
+              "gene", "consequence", "label", "score",
+          ), on="dst_i", how="left")
+          .join(emb_df.select(
+              pl.col("emb_i").alias("src_i"), pl.col("variant_id").alias("src_vid"),
+          ), on="src_i", how="left")
+          .drop("src_i", "dst_i"))
 
-        nb_grouped = nb.group_by("src_vid").agg(
-            pl.struct("id", "gene", "consequence", "label", "score", "similarity").alias("neighbors"))
-        nb_map = dict(zip(nb_grouped["src_vid"].to_list(), nb_grouped["neighbors"].to_list(), strict=True))
-        _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
+    nb_grouped = nb.group_by("src_vid").agg(
+        pl.struct("id", "gene", "consequence", "label", "score", "similarity").alias("neighbors"))
+    result = dict(zip(nb_grouped["src_vid"].to_list(), nb_grouped["neighbors"].to_list(), strict=True))
+    logger.info(f"Neighbors: {nb.height:,} edges -> {nb_grouped.height:,} variants")
+    return result
 
-    # ── UMAP ─────────────────────────────────────────────────────────────
-    if not umap:
-        _t("Skipping UMAP (use --umap to enable)")
-        umap_coords = None
-        umap_sub = None
-        gene_list = []
-        gene_to_idx = {}
-    else:
-        _t("UMAP...")
-        rng = np.random.RandomState(42)
-        n_sample = min(30_000, n_emb)
-        umap_idx = np.sort(rng.choice(n_emb, n_sample, replace=False))
 
-        pca = PCA(n_components=50, random_state=42).fit_transform(emb[umap_idx].numpy())
-        umap_coords = UMAP(
-            n_components=2, n_neighbors=30, min_dist=0.05, spread=10.0,
-            metric="correlation", random_state=42,
-        ).fit_transform(pca)
+# ── UMAP ────────────────────────────────────────────────────────────────
 
-        umap_sub = emb_df.select(
-            "variant_id", "gene", "label", pl.col("score").round(2),
-        )[umap_idx.tolist()]
-        gene_list = sorted(umap_sub["gene"].unique().to_list())
-        gene_to_idx = {g: i for i, g in enumerate(gene_list)}
 
-    # ── Attribution ──────────────────────────────────────────────────────
-    attribution_path = LABELED / PROBE / "attribution.json"
-    if attribution_path.exists():
-        attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df, k_effect=10, k_disruption=10)
-        attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
-        attr_logits = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_logit"].tolist(), strict=True))
-        _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
-    else:
-        attr_by_vid = {}
-        attr_logits = {}
-        logger.warning(f"No attribution model at {attribution_path}, skipping")
+def compute_umap(
+    emb: torch.Tensor, emb_ids: list[str], df: pl.DataFrame, n_sample: int = 30_000,
+) -> dict:
+    """PCA + UMAP on a random subsample. Returns dict ready for global.json "umap" key.
 
-    # ── Write to staging ─────────────────────────────────────────────────
-    staging = Path(tempfile.mkdtemp(prefix="variant_viewer_"))
+    Args:
+        emb: L2-normalized embeddings, shape (n, d).
+        emb_ids: Variant IDs corresponding to rows of emb.
+        df: Unified DataFrame with gene_name, label, score_pathogenic.
+        n_sample: Number of points to subsample for UMAP.
+
+    Returns:
+        Dict with keys: x, y, score, ids, genes, labels, gene_list.
+    """
+    n = len(emb_ids)
+    rng = np.random.RandomState(42)
+    n_sample = min(n_sample, n)
+    umap_idx = np.sort(rng.choice(n, n_sample, replace=False))
+
+    pca = PCA(n_components=50, random_state=42).fit_transform(emb[umap_idx].numpy())
+    coords = UMAP(
+        n_components=2, n_neighbors=30, min_dist=0.05, spread=10.0,
+        metric="correlation", random_state=42,
+    ).fit_transform(pca)
+
+    umap_sub = (
+        pl.DataFrame({"emb_i": range(n), "variant_id": emb_ids})
+        .join(df.select(
+            "variant_id", pl.col("gene_name").alias("gene"),
+            "label", pl.col("score_pathogenic").alias("score"),
+        ), on="variant_id", how="left")
+        .with_columns(
+            pl.col("gene").fill_null("?"),
+            pl.col("label").fill_null("?"),
+            pl.col("score").fill_null(0.0).round(2),
+        )
+        .select("variant_id", "gene", "label", "score")
+    )[umap_idx.tolist()]
+
+    gene_list = sorted(umap_sub["gene"].unique().to_list())
+    gene_to_idx = {g: i for i, g in enumerate(gene_list)}
+
+    return {
+        "x": np.round(coords[:, 0], 2).tolist(),
+        "y": np.round(coords[:, 1], 2).tolist(),
+        "score": umap_sub["score"].to_list(),
+        "ids": umap_sub["variant_id"].to_list(),
+        "genes": [gene_to_idx[g] for g in umap_sub["gene"].to_list()],
+        "labels": [LABEL_TO_IDX.get(lab, 2) for lab in umap_sub["label"].to_list()],
+        "gene_list": gene_list,
+    }
+
+
+# ── Variant serialization ──────────────────────────────────────────────
+
+
+def _build_variant_dict(
+    i: int,
+    col_data: dict[str, list],
+    disruption_heads: tuple[str, ...],
+    effect_heads: tuple[str, ...],
+    ref_d: dict[str, list],
+    var_d: dict[str, list],
+    eff_d: dict[str, list],
+    gt_d: dict[str, list],
+    vep_data: dict[str, list],
+    gnomad_pops: dict[str, list],
+    clinvar_data: dict[str, list],
+    nb_map: dict[str, list],
+    attr_by_vid: dict[str, str],
+    attr_logits: dict[str, float],
+    domain_cache: dict[str, str],
+) -> dict:
+    """Build the JSON-serializable dict for a single variant at row index i."""
+    vid = col_data["variant_id"][i]
+
+    # Only include heads with meaningful delta
+    disruption = {}
+    for h in disruption_heads:
+        r = ref_d[h][i]
+        if r is None:
+            continue
+        va = var_d[h][i] if var_d[h][i] is not None else r
+        delta = round(va - r, 4)
+        if abs(delta) > 0.01:
+            disruption[h] = delta
+
+    effect = {h: eff_d[h][i] for h in effect_heads if eff_d[h][i] is not None}
+    gt = {h: v for h, col in gt_d.items() if (v := col[i]) is not None and v > 0}
+
+    nbs = nb_map.get(vid, [])
+    n_p = sum(1 for nb in nbs if "pathogenic" in nb.get("label", ""))
+    n_b = sum(1 for nb in nbs if "benign" in nb.get("label", ""))
+
+    return {
+        "id": vid,
+        "gene": col_data["gene_name"][i],
+        "chrom": col_data["chrom"][i], "pos": col_data["pos"][i],
+        "ref": col_data["ref"][i], "alt": col_data["alt"][i],
+        "vcf_pos": col_data["vcf_pos"][i],
+        "gene_strand": col_data["gene_strand"][i],
+        "consequence": col_data["consequence"][i],
+        "substitution": col_data["substitution"][i],
+        "label": col_data["label"][i],
+        "significance": col_data["clinical_significance"][i],
+        "stars": col_data["stars"][i],
+        "disease": col_data["disease_name"][i],
+        "score": col_data["score_pathogenic"][i],
+        "rs_id": col_data["rs_id"][i],
+        "allele_id": col_data["allele_id"][i],
+        "gene_id": col_data["gene_id"][i],
+        "hgvsc": vep_data["hgvsc"][i],
+        "hgvsp": vep_data["hgvsp"][i],
+        "impact": vep_data["impact"][i],
+        "exon": vep_data["exon"][i],
+        "transcript": vep_data["transcript_id"][i],
+        "swissprot": vep_data["swissprot"][i],
+        "domains": resolve_domains(vep_data["domains"][i], domain_cache),
+        "loeuf": vep_data["loeuf"][i],
+        "gnomad": vep_data["gnomade"][i],
+        "gnomad_pop": {k: v for k, col in gnomad_pops.items() if (v := col[i]) is not None and v > 0},
+        "variation_id": clinvar_data["variation_id"][i],
+        "cytogenetic": clinvar_data["cytogenetic"][i],
+        "review_status": clinvar_data["review_status"][i],
+        "acmg": [c for c in (clinvar_data["acmg_codes"][i] or "").split(";") if c],
+        "n_submissions": clinvar_data["n_submissions"][i],
+        "submitters": [s for s in (clinvar_data["submitters"][i] or "").split(";") if s],
+        "last_evaluated": clinvar_data["last_evaluated"][i],
+        "clinical_features": [f for f in (clinvar_data["clinical_features"][i] or "").split(";") if f and f != "not provided"],
+        "origin": clinvar_data["origin"][i],
+        "disruption": disruption,
+        "effect": effect,
+        "gt": gt,
+        "attribution": _parse_attribution(attr_by_vid.get(vid)),
+        "attr_logit": attr_logits.get(vid),
+        "neighbors": nbs,
+        "nP": n_p, "nB": n_b, "nV": len(nbs) - n_p - n_b,
+    }
+
+
+def write_variants(
+    df: pl.DataFrame,
+    cfg: dict,
+    nb_map: dict[str, list],
+    attr_by_vid: dict[str, str],
+    attr_logits: dict[str, float],
+    domain_cache: dict[str, str],
+    staging: Path,
+) -> int:
+    """Serialize per-variant JSONs to staging/variants/. Returns count written."""
+    ref_cols, var_cols, eff_cols, gt_cols, disruption_heads, effect_heads = _classify_heads(df, cfg)
+
     staging_vdir = staging / "variants"
-    staging_vdir.mkdir()
+    staging_vdir.mkdir(exist_ok=True)
 
-    # ── Variant JSONs ────────────────────────────────────────────────────
-    _t("Writing variant JSONs...")
     meta_fields = (
         "variant_id", "gene_name", "chrom", "pos", "ref", "alt",
         "vcf_pos", "gene_strand",
@@ -348,99 +463,53 @@ def main(
     eff_d = {h: col_data[c] for c, h in zip(eff_cols, effect_heads, strict=True)}
     gt_d = {c[3:]: col_data[c] for c in gt_cols}
 
-    # Pre-resolve VEP columns once (avoids [None]*n allocation per iteration)
+    # Pre-resolve optional column lookups (shared default avoids per-key allocation)
     n = df.height
-    _none = [None] * n
-    vep = {
-        k: col_data.get(f"vep_{k}", _none)
+    defaults = [None] * n
+    vep_data = {
+        k: col_data.get(f"vep_{k}", defaults)
         for k in ("hgvsc", "hgvsp", "impact", "exon",
                   "transcript_id", "swissprot", "domains", "loeuf", "gnomade")
     }
     gnomad_pops = {
-        k: col_data.get(f"vep_gnomade_{k}", _none)
+        k: col_data.get(f"vep_gnomade_{k}", defaults)
         for k in ("afr", "amr", "asj", "eas", "fin", "nfe", "sas")
     }
-    # ClinVar submission fields (may not exist if submissions.feather not generated)
-    clinvar = {
-        k: col_data.get(k, _none)
+    clinvar_data = {
+        k: col_data.get(k, defaults)
         for k in ("variation_id", "cytogenetic", "review_status", "acmg_codes",
                   "submitters", "clinical_features", "n_submissions",
                   "last_evaluated", "origin")
     }
 
     for i in track(range(n), description="Writing variants..."):
+        data = _build_variant_dict(
+            i, col_data, disruption_heads, effect_heads,
+            ref_d, var_d, eff_d, gt_d,
+            vep_data, gnomad_pops, clinvar_data,
+            nb_map, attr_by_vid, attr_logits, domain_cache,
+        )
         vid = col_data["variant_id"][i]
-
-        # Only include heads with meaningful delta
-        disruption = {}
-        for h in disruption_heads:
-            r = ref_d[h][i]
-            if r is None:
-                continue
-            va = var_d[h][i] if var_d[h][i] is not None else r
-            delta = round(va - r, 4)
-            if abs(delta) > 0.01:
-                disruption[h] = delta
-
-        effect = {h: eff_d[h][i] for h in effect_heads if eff_d[h][i] is not None}
-        gt = {h: v for h, col in gt_d.items() if (v := col[i]) is not None and v > 0}
-
-        neighbors = nb_map.get(vid, [])
-        n_p = sum(1 for nb in neighbors if "pathogenic" in nb.get("label", ""))
-        n_b = sum(1 for nb in neighbors if "benign" in nb.get("label", ""))
-
-        data = {
-            "id": vid,
-            "gene": col_data["gene_name"][i],
-            "chrom": col_data["chrom"][i], "pos": col_data["pos"][i],
-            "ref": col_data["ref"][i], "alt": col_data["alt"][i],
-            "vcf_pos": col_data["vcf_pos"][i],
-            "gene_strand": col_data["gene_strand"][i],
-            "consequence": col_data["consequence"][i],
-            "substitution": col_data["substitution"][i],
-            "label": col_data["label"][i],
-            "significance": col_data["clinical_significance"][i],
-            "stars": col_data["stars"][i],
-            "disease": col_data["disease_name"][i],
-            "score": col_data["score_pathogenic"][i],
-            "rs_id": col_data["rs_id"][i],
-            "allele_id": col_data["allele_id"][i],
-            "gene_id": col_data["gene_id"][i],
-            "hgvsc": vep["hgvsc"][i],
-            "hgvsp": vep["hgvsp"][i],
-            "impact": vep["impact"][i],
-            "exon": vep["exon"][i],
-            "transcript": vep["transcript_id"][i],
-            "swissprot": vep["swissprot"][i],
-            "domains": resolve_domains(vep["domains"][i], domain_cache),
-            "loeuf": vep["loeuf"][i],
-            "gnomad": vep["gnomade"][i],
-            "gnomad_pop": {k: v for k, col in gnomad_pops.items() if (v := col[i]) is not None and v > 0},
-            "variation_id": clinvar["variation_id"][i],
-            "cytogenetic": clinvar["cytogenetic"][i],
-            "review_status": clinvar["review_status"][i],
-            "acmg": [c for c in (clinvar["acmg_codes"][i] or "").split(";") if c],
-            "n_submissions": clinvar["n_submissions"][i],
-            "submitters": [s for s in (clinvar["submitters"][i] or "").split(";") if s],
-            "last_evaluated": clinvar["last_evaluated"][i],
-            "clinical_features": [f for f in (clinvar["clinical_features"][i] or "").split(";") if f and f != "not provided"],
-            "origin": clinvar["origin"][i],
-            "disruption": disruption,
-            "effect": effect,
-            "gt": gt,
-            "attribution": _parse_attribution(attr_by_vid.get(vid)),
-            "attr_logit": attr_logits.get(vid),
-            "neighbors": neighbors,
-            "nP": n_p, "nB": n_b, "nV": len(neighbors) - n_p - n_b,
-        }
         (staging_vdir / f"{sanitize_vid(vid)}.json").write_bytes(orjson.dumps(data))
 
-    _t(f"Wrote {n:,} variants to staging")
+    return n
 
-    # ── global.json ──────────────────────────────────────────────────────
-    _t("global.json...")
+
+# ── Global + search + static files ─────────────────────────────────────
+
+
+def write_global(
+    df: pl.DataFrame,
+    cfg: dict,
+    domain_cache: dict[str, str],
+    umap_data: dict | None,
+    staging: Path,
+) -> None:
+    """Write global.json, search.json, and copy static files to staging."""
+    ref_cols, var_cols, eff_cols, _, disruption_heads, effect_heads = _classify_heads(df, cfg)
     all_head_names = disruption_heads + effect_heads
-    scores_t = torch.tensor(col_data["score_pathogenic"], dtype=torch.float32)
+
+    scores_t = torch.tensor(df["score_pathogenic"].to_list(), dtype=torch.float32)
     ben_mask = torch.from_numpy((df["label"] == "benign").to_numpy())
     path_mask = torch.from_numpy((df["label"] == "pathogenic").to_numpy())
 
@@ -450,11 +519,11 @@ def main(
     delta_cols = [f"delta_{h}" for h in disruption_heads]
     df_hist = df.with_columns(delta_exprs)
     score_matrix = torch.from_numpy(
-        df_hist.select(delta_cols + eff_cols).to_numpy(allow_copy=True).T
+        df_hist.select(delta_cols + list(eff_cols)).to_numpy(allow_copy=True).T
     ).float()  # (n_heads, n_variants)
 
     n_disruption = len(disruption_heads)
-    # Remap delta heads from [-1,1] → [0,1] for histogram binning
+    # Remap delta heads from [-1,1] -> [0,1] for histogram binning
     score_matrix[:n_disruption] = (score_matrix[:n_disruption] + 1) / 2
 
     hh = {}
@@ -477,15 +546,7 @@ def main(
 
     decomp_path = LABELED / PROBE / "score_decomposition.json"
     (staging / "global.json").write_bytes(orjson.dumps({
-        "umap": {
-            "x": np.round(umap_coords[:, 0], 2).tolist(),
-            "y": np.round(umap_coords[:, 1], 2).tolist(),
-            "score": umap_sub["score"].to_list(),
-            "ids": umap_sub["variant_id"].to_list(),
-            "genes": [gene_to_idx[g] for g in umap_sub["gene"].to_list()],
-            "labels": [LABEL_TO_IDX.get(lab, 2) for lab in umap_sub["label"].to_list()],
-            "gene_list": gene_list,
-        } if umap_coords is not None else None,
+        "umap": umap_data,
         "distributions": {
             "pathogenic": {
                 "benign": prebin(scores_t[ben_mask], 80),
@@ -501,7 +562,6 @@ def main(
     }))
 
     # ── search.json ──────────────────────────────────────────────────────
-    _t("search.json...")
     search_df = (df
         .select("variant_id", "gene_name", "label", "score_pathogenic", "consequence")
         .filter(pl.col("gene_name") != "?")
@@ -527,6 +587,95 @@ def main(
         interp_dst.mkdir(parents=True, exist_ok=True)
         for f in interp_src.glob("*.json"):
             shutil.copy2(f, interp_dst / f.name)
+
+
+# ── Main orchestrator ───────────────────────────────────────────────────
+
+
+def main(
+    output: Path | None = None,
+    sync: bool = False,
+    umap: bool = False,
+    neighbors: bool = False,
+) -> Path:
+    """Build the variant viewer static site.
+
+    Args:
+        output: Output directory for rsync (default: /tmp staging only).
+        sync: If True, rsync staging to output directory.
+        umap: Compute UMAP embedding (~40s).
+        neighbors: Compute nearest neighbors (requires GPU).
+
+    Returns:
+        Path to the staging directory (or output if synced).
+    """
+    t0 = time.time()
+
+    def _t(msg: str) -> None:
+        logger.info(f"[{time.time() - t0:.1f}s] {msg}")
+
+    # ── Validate inputs ──────────────────────────────────────────────────
+    missing = []
+    for path, desc in [
+        (LABELED / PROBE / "scores.feather", f"Labeled scores ({PROBE})"),
+        (VUS / PROBE / "scores.feather", f"VUS scores ({PROBE})"),
+        (ANNOTATIONS, "Annotations"),
+        (MAYO_DATA / "clinvar" / "deconfounded-full" / "metadata.feather", "Labeled metadata"),
+        (MAYO_DATA / "gencode" / "genes.feather", "GENCODE genes"),
+    ]:
+        if not path.exists():
+            missing.append(f"  {desc}: {path}")
+    if missing:
+        raise FileNotFoundError(
+            "Missing required data files:\n" + "\n".join(missing) + "\n\nRun: uv run vv check"
+        )
+
+    # ── Load ─────────────────────────────────────────────────────────────
+    _t("Loading...")
+    df, cfg = load_data()
+    domain_cache = load_domain_names()
+    _t(f"{df.height:,} variants loaded, {len(domain_cache):,} domain names cached")
+
+    # ── Embeddings + neighbors + UMAP ────────────────────────────────────
+    nb_map: dict[str, list] = {}
+    umap_data: dict | None = None
+
+    if neighbors or umap:
+        _t("Loading embeddings...")
+        emb, emb_ids = _load_all_embeddings(cfg)
+
+        if neighbors:
+            _t("GPU cosine similarity...")
+            nb_map = compute_neighbors(emb, emb_ids, df, k=K_NEIGHBORS)
+
+        if umap:
+            _t("UMAP...")
+            umap_data = compute_umap(emb, emb_ids, df)
+    else:
+        _t("Skipping embeddings (use --neighbors or --umap to enable)")
+
+    # ── Attribution ──────────────────────────────────────────────────────
+    attribution_path = LABELED / PROBE / "attribution.json"
+    if attribution_path.exists():
+        attr_model = AttributionModel.load(attribution_path)
+        attr_df = attr_model.attribute(df, k_effect=10, k_disruption=10)
+        attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
+        attr_logits = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_logit"].tolist(), strict=True))
+        _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
+    else:
+        attr_by_vid = {}
+        attr_logits = {}
+        logger.warning(f"No attribution model at {attribution_path}, skipping")
+
+    # ── Write to staging ─────────────────────────────────────────────────
+    staging = Path(tempfile.mkdtemp(prefix="variant_viewer_"))
+
+    _t("Writing variant JSONs...")
+    n = write_variants(df, cfg, nb_map, attr_by_vid, attr_logits, domain_cache, staging)
+    _t(f"Wrote {n:,} variants to staging")
+
+    _t("global.json + search.json...")
+    write_global(df, cfg, domain_cache, umap_data, staging)
 
     # ── Sync or serve from staging ───────────────────────────────────────
     if sync and output:
