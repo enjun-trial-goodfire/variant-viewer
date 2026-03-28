@@ -753,7 +753,7 @@ function renderVariant(v) {
     const val = dbVal ?? probeVal;
     if (val == null) return null;
     const damaging = p.invert ? val < p.threshold : val > p.threshold;
-    return {name: p.name, value: val, source: dbVal != null ? 'database' : 'probe', call: damaging ? 'D' : 'T', color: damaging ? 'var(--negative)' : 'var(--positive)'};
+    return {name: p.name, key: p.key, value: val, source: dbVal != null ? 'database' : 'probe', call: damaging ? 'D' : 'T', color: damaging ? 'var(--negative)' : 'var(--positive)'};
   }).filter(Boolean);
 
   const hasProbe = predRows.some(r => r.source === 'probe');
@@ -765,7 +765,7 @@ function renderVariant(v) {
       <div class="profile-legend">${hasProbe ? 'Database values where available, Evo2 predictions otherwise' : 'Database values from external tools'}</div>
       ${predRows.map(r => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
         <span style="width:120px;color:var(--text-secondary)">${r.name}</span>
-        <span style="flex:1;height:10px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(2, r.value * 100)}%;background:${barColor(r.value)};border-radius:3px"></span></span>
+        <span style="flex:1;height:10px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(2, r.value * 100)}%;background:${headColor(r.key, r.value, false)};border-radius:3px"></span></span>
         <span style="width:40px;text-align:right;font-family:monospace;font-size:11px">${r.value.toFixed(2)}</span>
         <span style="width:16px;text-align:center;font-weight:700;font-size:11px;color:${r.color}">${r.call}</span>
       </div>`).join('')}
