@@ -45,7 +45,7 @@ data/
 ├── clinvar/
 │   ├── deconfounded-full/
 │   │   ├── metadata.feather         # ClinVar labeled variant metadata
-│   │   └── annotations_v8.feather   # Ground truth annotation labels
+│   │   └── annotations.feather   # Ground truth annotation labels
 │   ├── vus/
 │   │   └── metadata.feather         # VUS variant metadata
 │   └── submissions.feather          # [optional] ClinVar submission details
@@ -61,7 +61,7 @@ ln -s /mnt/polished-lake/home/thomasd/projects/gfm_gen/data data
 **Shared artifacts** (on cluster filesystem):
 ```
 /mnt/polished-lake/artifacts/.../clinvar_evo2_deconfounded_full/
-└── probe_v8/
+└── probe_v9/
     ├── scores.feather     # 3-view scores (ref_score_*, var_score_*, score_*)
     ├── embeddings/        # Covariance embeddings (for UMAP + neighbors)
     ├── config.json        # Head definitions (disruption_heads, effect_heads)
@@ -69,7 +69,7 @@ ln -s /mnt/polished-lake/home/thomasd/projects/gfm_gen/data data
     └── attribution.json   # [optional] Ridge attribution model
 ```
 
-Run `bash preflight.sh probe_v8` to validate everything exists.
+Run `bash preflight.sh probe_v9` to validate everything exists.
 
 ## Pipeline
 
@@ -81,16 +81,16 @@ Run `bash preflight.sh probe_v8` to validate everything exists.
 
 Run the full chain:
 ```bash
-bash pipeline/pipeline.sh /path/to/clinvar_evo2_deconfounded_full/probe_v8
+bash pipeline/pipeline.sh /path/to/clinvar_evo2_deconfounded_full/probe_v9
 ```
 
 Or step by step:
 ```bash
 # 1. Score (8 GPU shards)
-sbatch --array=0-7 pipeline/extract.sh --probe $ACTS/probe_v8 --activations $ACTS
+sbatch --array=0-7 pipeline/extract.sh --probe $ACTS/probe_v9 --activations $ACTS
 
 # 2. Merge shards
-sbatch --dependency=afterok:$JOBID pipeline/finalize.sh $ACTS/probe_v8
+sbatch --dependency=afterok:$JOBID pipeline/finalize.sh $ACTS/probe_v9
 
 # 3. Build static site
 uv run python build.py

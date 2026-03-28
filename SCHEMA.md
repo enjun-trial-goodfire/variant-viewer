@@ -69,7 +69,7 @@ gnomad_pop            Per-ancestry frequencies (sparse, only >0)
 disruption            Ref→var disruption scores (flat dict)
                       Each head is scored on ref and var activations separately.
                       The delta (var - ref) shows what the mutation disrupted.
-  {head_key}          [ref, var] — 2-tuple of floats
+  {head_key}          float -- delta (var - ref), only when |delta| > 0.01 — 2-tuple of floats
 
 effect                Variant effect scores (flat dict)
                       Each head is scored on diff (var-ref) activations.

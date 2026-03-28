@@ -5,7 +5,7 @@ then optionally rsyncs to the output path. See SCHEMA.md for the data contract.
 
 Two score types:
   - **disruption**: ref_score/var_score from the ref-view probe. Shows what changed
-    between reference and variant allele. Stored as [ref, var] tuples per head.
+    between reference and variant allele. Stored as delta scalars per head.
   - **effect**: score from the diff-view probe. Predicts variant-level properties
     (clinical predictors, consequence, domain effects). Stored as scalars per head.
 
