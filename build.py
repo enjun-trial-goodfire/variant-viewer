@@ -34,36 +34,20 @@ from umap import UMAP
 
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 
-# ── Constants ────────────────────────────────────────────────────────────
-MAYO_DATA = Path(__file__).parent.parent / "data"
-ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
-
-# Consequence → integer encoding (deterministic order by frequency in deconfounded-full)
-CONSEQUENCE_CLASSES = (
-    "missense_variant", "intron_variant", "synonymous_variant", "nonsense",
-    "frameshift_variant", "non-coding_transcript_variant", "splice_donor_variant",
-    "splice_acceptor_variant", "5_prime_UTR_variant", "3_prime_UTR_variant",
-    "splice_region_variant", "start_lost", "inframe_deletion", "inframe_insertion",
-    "inframe_indel", "stop_lost", "genic_downstream_transcript_variant",
-    "genic_upstream_transcript_variant", "no_sequence_alteration",
-    "initiator_codon_variant",
+from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES, LABEL_TO_IDX
+from display import auto_group, display_name
+from paths import (
+    ARTIFACTS, MAYO_DATA, sanitize_vid,
+    load_vep, load_domain_names, resolve_domains, load_metadata,
 )
 
-_AA = "ACDEFGHIKLMNPQRSTVWY"
-AA_SWAP_CLASSES = tuple(f"{a}>{b}" for a in _AA for b in _AA if a != b)
-
-ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations_v8.feather"
+ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations_v9.feather"
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS = ARTIFACTS / "clinvar_evo2_vus"
-PROBE = "probe_v8"
+PROBE = "probe_v9"
 K_NEIGHBORS = 10
-LABEL_TO_IDX = {"benign": 0, "pathogenic": 1, "VUS": 2}
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
 VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations"
-VEP_DOMAIN_CACHE = Path(
-    "/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/annotations/"
-    "sources/cache/vep_domain_lookup.json"
-)
 VEP_COLS = (
     "variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
     "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot",
@@ -72,181 +56,11 @@ VEP_COLS = (
     "vep_gnomade_eas", "vep_gnomade_fin", "vep_gnomade_nfe", "vep_gnomade_sas",
 )
 
-# ── Display names ────────────────────────────────────────────────────────
-_DISPLAY_OVERRIDES: dict[str, str] = {
-    "cadd_c": "CADD", "revel_c": "REVEL", "alphamissense_c": "AlphaMissense",
-    "sift_c": "SIFT", "polyphen_c": "PolyPhen-2", "eve_c": "EVE",
-    "spliceai_max_c": "SpliceAI", "gnomad_af_c": "gnomAD AF",
-    "spliceai_ag_c": "SpliceAI AG", "spliceai_al_c": "SpliceAI AL",
-    "spliceai_dg_c": "SpliceAI DG", "spliceai_dl_c": "SpliceAI DL",
-    "mpc_c": "MPC", "mvp_c": "MVP", "mcap_c": "M-CAP",
-    "metalr_c": "MetaLR", "vest4_c": "VEST4", "primateai_c": "PrimateAI",
-    "mutpred_c": "MutPred", "clinpred_c": "ClinPred", "deogen2_c": "DEOGEN2",
-    "bayesdel_c": "BayesDel", "remm_c": "ReMM", "regulomedb_c": "RegulomeDB",
-    "phylop_c": "PhyloP", "phastcons_c": "PhastCons", "gerp_c": "GERP",
-    "phylop_100way": "PhyloP 100-way", "phastcons_100way": "PhastCons 100-way",
-    "blosum62_c": "BLOSUM62", "grantham_c": "Grantham",
-    "hydrophobicity_c": "Hydrophobicity", "volume_c": "Volume", "mw_c": "Mol. Weight",
-    "loeuf_c": "LOEUF",
-    "gtex_max_tpm_c": "GTEx Max TPM", "gtex_n_tissues_c": "GTEx Tissues",
-    "gtex_brain_max_c": "GTEx Brain Max",
-    "in_domain": "In Domain", "is_exonic": "Exonic",
-    "splice_disrupting": "Splice Disrupting", "charge_altering": "Charge Altering",
-    "pathogenic": "Pathogenicity", "consequence": "Consequence", "impact": "Impact",
-    "aa_swap": "AA Substitution",
-    # AlphaFold structure features (avoid confusion with splicing)
-    "psi": "AlphaFold Psi Angle", "phi": "AlphaFold Phi Angle",
-    "plddt": "AlphaFold Confidence (pLDDT)", "rsa": "Relative Solvent Accessibility",
-    "sasa": "Solvent Accessible Surface Area",
-    "secondary_structure_H": "Alpha Helix", "secondary_structure_E": "Beta Strand",
-    "secondary_structure_C": "Coil/Loop",
-    "is_disordered": "Intrinsically Disordered", "is_buried": "Buried Residue",
-    "n_contacts": "Residue Contacts", "residue_number": "Residue Number",
-    "gc_content": "GC Content", "cpg_density": "CpG Density",
-    "recomb_rate": "Recombination Rate", "trinuc_mutation_rate": "Trinucleotide Mutation Rate",
-    "codon_position": "Codon Position", "syn_potential": "Synonymous Potential",
-    "exon_number": "Exon Number", "n_transcripts_with_exon": "Transcripts with Exon",
-    "disorder_content_fraction": "Disorder Content",
-    "ppi_partner_count": "PPI Partners", "is_ppi_interface": "PPI Interface",
-    "is_splice_donor": "Splice Donor Site", "is_splice_acceptor": "Splice Acceptor Site",
-    "is_branchpoint_region": "Branchpoint Region", "is_polypyrimidine_tract": "Polypyrimidine Tract",
-    "is_exon_to_intron": "Exon-Intron Boundary", "is_intron_to_exon": "Intron-Exon Boundary",
-    "cadd_wg_c": "CADD (whole-genome)",
-}
-
-_ACRONYMS = {"chipseq", "atacseq", "chromhmm", "fstack", "ptm", "elm"}
-_GROUP_PREFIXES = (
-    "interpro_", "pfam_", "amino_acid_", "elm_", "gtex_",
-    "chipseq_", "atacseq_", "chromhmm_", "fstack_", "ptm_",
-)
-
-# ── Head grouping (reverse map: group → prefixes) ───────────────────────
-_PREFIX_TO_GROUP: dict[str, str] = {}
-for _group, _prefixes in {
-    "Conservation": ("phylop", "phastcons", "gerp"),
-    "Protein features": ("secondary", "disorder", "plddt", "rsa", "sasa", "phi", "psi", "ppi", "residue"),
-    "Structure": ("in", "is", "has"),
-    "InterPro domains": ("interpro",),
-    "Pfam domains": ("pfam",),
-    "ELM motifs": ("elm",),
-    "ChIP-seq": ("chipseq",),
-    "ATAC-seq": ("atacseq",),
-    "Chromatin": ("chromhmm", "fstack"),
-    "Regulatory": ("ccre", "dna"),
-    "Amino acid": ("amino",),
-    "Sequence context": ("codon", "trinuc", "gc", "cpg", "syn"),
-    "Substitution": ("aa", "blosum62", "grantham", "hydrophobicity", "volume", "mw"),
-    "Modifications": ("ptm",),
-    "Expression": ("gtex",),
-    "Region": ("region", "exon", "n", "trf", "segdup", "recomb"),
-    "Constraint": ("loeuf",),
-    "Clinical": (
-        "cadd", "revel", "alphamissense", "sift", "polyphen", "eve", "bayesdel",
-        "clinpred", "deogen2", "mcap", "metalr", "mpc", "mutpred", "mvp",
-        "primateai", "vest4", "remm", "regulomedb",
-    ),
-    "Splice": ("spliceai",),
-    "Variant effects": ("splice", "charge", "consequence", "impact", "csq"),
-    "Population": ("gnomad",),
-    "Pathogenicity": ("pathogenic",),
-}.items():
-    _PREFIX_TO_GROUP.update({p: _group for p in _prefixes})
-
-
-def load_domain_names() -> dict[str, str]:
-    """Load VEP domain ID→name cache (e.g. 'Pfam:PF00079' → 'Serpin')."""
-    if VEP_DOMAIN_CACHE.exists():
-        with open(VEP_DOMAIN_CACHE) as f:
-            return json.load(f)
-    return {}
-
-
-def resolve_domains(raw: str | None, cache: dict[str, str]) -> list[dict] | None:
-    """Convert 'Pfam:PF00079;CDD:cd02056;...' to [{db, id, name?}, ...]."""
-    if not raw:
-        return None
-    result = []
-    for entry in raw.split(";"):
-        parts = entry.split(":", 1)
-        if len(parts) != 2:
-            continue
-        db, did = parts
-        key = f"{db}:{did}"
-        name = cache.get(key)
-        d = {"db": db, "id": did}
-        if name:
-            d["name"] = name
-        result.append(d)
-    return result or None
-
-
-def display_name(h: str, domain_cache: dict[str, str] | None = None) -> str:
-    """Human-readable head name, with group prefix stripped."""
-    if h in _DISPLAY_OVERRIDES:
-        return _DISPLAY_OVERRIDES[h]
-    base = h.removesuffix("_c")
-    stripped_prefix = ""
-    for prefix in _GROUP_PREFIXES:
-        if base.startswith(prefix):
-            stripped_prefix = prefix.rstrip("_").replace("_", " ").title()
-            base = base[len(prefix):]
-            break
-    base = base.replace("_", " ")
-    # Keep prefix for very short names (e.g., amino_acid_L → "Amino Acid L")
-    if len(base.strip()) <= 2 and stripped_prefix:
-        return f"{stripped_prefix} {base.strip().upper()}"
-    if h.split("_")[0] in _ACRONYMS:
-        return base.upper()
-    if base.startswith("PF"):
-        name = (domain_cache or {}).get(f"Pfam:{base}")
-        return f"{name} ({base})" if name else base
-    return base.title()
-
-
-def auto_group(heads: set[str]) -> dict[str, list[str]]:
-    """Group heads by first-token prefix lookup."""
-    g: dict[str, list[str]] = {}
-    for h in sorted(heads):
-        g.setdefault(_PREFIX_TO_GROUP.get(h.split("_")[0], "Other"), []).append(h)
-    return g
-
-
 def _parse_attribution(json_str: str | None) -> dict:
-    """Parse attribution JSON. Expects {effect: [...], disruption: [...]}."""
+    """Parse attribution JSON."""
     if not json_str:
         return {}
     return orjson.loads(json_str)
-
-
-def sanitize_vid(v: str) -> str:
-    """Make a variant ID safe for use as a filename.
-
-    Long variant IDs (indels) are hashed to avoid filesystem limits.
-    Uses FNV-1a so the JS frontend can compute the same hash synchronously.
-    """
-    s = v.replace(":", "_").replace("/", "_")
-    if len(s) <= 200:
-        return s
-    # FNV-1a 64-bit, matching the JS implementation
-    h = 0xCBF29CE484222325
-    for b in v.encode():
-        h = ((h ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return f"{s[:60]}_{h:016x}"
-
-
-def load_metadata(preset: str) -> pl.DataFrame:
-    """Load ClinVar metadata and enrich with gene_id/gene_strand from GENCODE."""
-    meta = pl.read_ipc(MAYO_DATA / "clinvar" / preset / "metadata.feather")
-    genes = (
-        pl.read_ipc(MAYO_DATA / "gencode" / "genes.feather")
-        .select("gene_name", "gene_id", "strand")
-        .unique(subset=["gene_name"])
-    )
-    return (
-        meta.join(genes, on="gene_name", how="inner")
-        .unique(subset=["variant_id"])
-        .rename({"strand": "gene_strand"})
-    )
 
 
 def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
@@ -302,10 +116,15 @@ def main() -> None:
         (pl.col("pos") + 1).alias("vcf_pos"),  # 0-based → 1-based
     )
 
-    df = df.with_columns(
-        pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
-        pl.col("pred_aa_swap").replace_strict(dict(enumerate(AA_SWAP_CLASSES)), default=None).alias("substitution"),
-    )
+    # Decode integer predictions → strings (backward compat for older probes)
+    if "pred_consequence" in df.columns and df["pred_consequence"].dtype in (pl.Int32, pl.Int64, pl.UInt32):
+        df = df.with_columns(
+            pl.col("pred_consequence").replace_strict(dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown").alias("consequence"),
+            pl.col("pred_aa_swap").replace_strict(dict(enumerate(AA_SWAP_CLASSES)), default=None).alias("substitution"),
+        )
+    elif "pred_consequence" in df.columns:
+        # Already strings (new extract.py writes labels directly)
+        df = df.rename({"pred_consequence": "consequence", "pred_aa_swap": "substitution"})
 
     gt = pl.read_ipc(ANNOTATIONS)
     df = df.join(
@@ -315,19 +134,7 @@ def main() -> None:
 
     # VEP annotations (HGVS, gnomAD frequencies, domains, etc.)
     _t("Loading VEP annotations...")
-    vep_string_cols = {"variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
-                        "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot", "vep_domains"}
-    vep_dfs = []
-    for chrom_file in sorted(VARIANT_ANN_DIR.glob("variant_annotations_chr*.parquet")):
-        schema = pl.read_parquet_schema(chrom_file)
-        available = [c for c in VEP_COLS if c in schema]
-        chunk = pl.read_parquet(chrom_file, columns=available)
-        # Normalize mixed String/Float columns across chromosomes (single pass)
-        float_casts = [c for c in chunk.columns if c not in vep_string_cols and chunk[c].dtype in (pl.Utf8, pl.String)]
-        if float_casts:
-            chunk = chunk.with_columns(*(pl.col(c).cast(pl.Float64, strict=False) for c in float_casts))
-        vep_dfs.append(chunk)
-    vep = pl.concat(vep_dfs, how="diagonal")
+    vep = load_vep(VARIANT_ANN_DIR, VEP_COLS)
     df = df.join(vep, on="variant_id", how="left")
 
     # ClinVar submission data (ACMG codes, submitters, cytogenetic, etc.)
@@ -407,54 +214,55 @@ def main() -> None:
         nb_map = {}
     else:
         _t("GPU cosine similarity...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    emb_gpu = emb.to(device, non_blocking=True)
-    topk_indices, topk_values = [], []
-    for start in range(0, n_emb, 4096):
-        end = min(start + 4096, n_emb)
-        similarity = emb_gpu[start:end] @ emb_gpu.T
-        similarity[torch.arange(end - start, device=device), torch.arange(start, end, device=device)] = -1
-        topk = similarity.topk(K_NEIGHBORS, dim=1)
-        topk_indices.append(topk.indices.cpu())
-        topk_values.append(topk.values.cpu())
-    topk_i = torch.cat(topk_indices).numpy()
-    topk_v = torch.cat(topk_values).numpy()
-    del emb_gpu
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        emb_gpu = emb.to(device, non_blocking=True)
+        topk_indices, topk_values = [], []
+        for start in range(0, n_emb, 4096):
+            end = min(start + 4096, n_emb)
+            similarity = emb_gpu[start:end] @ emb_gpu.T
+            similarity[torch.arange(end - start, device=device), torch.arange(start, end, device=device)] = -1
+            topk = similarity.topk(K_NEIGHBORS, dim=1)
+            topk_indices.append(topk.indices.cpu())
+            topk_values.append(topk.values.cpu())
+        topk_i = torch.cat(topk_indices).numpy()
+        topk_v = torch.cat(topk_values).numpy()
+        del emb_gpu
 
-    _t("Building neighbor table...")
-    emb_df = (
-        pl.DataFrame({"emb_i": range(n_emb), "variant_id": emb_ids})
-        .join(df.select(
-            "variant_id", pl.col("gene_name").alias("gene"),
-            "consequence", "label", pl.col("score_pathogenic").alias("score"),
-        ), on="variant_id", how="left")
-        .with_columns(
-            pl.col("gene").fill_null("?"),
-            pl.col("consequence").fill_null("?"),
-            pl.col("label").fill_null("?"),
-            pl.col("score").fill_null(0.0),
+    if not args.skip_neighbors:
+        _t("Building neighbor table...")
+        emb_df = (
+            pl.DataFrame({"emb_i": range(n_emb), "variant_id": emb_ids})
+            .join(df.select(
+                "variant_id", pl.col("gene_name").alias("gene"),
+                "consequence", "label", pl.col("score_pathogenic").alias("score"),
+            ), on="variant_id", how="left")
+            .with_columns(
+                pl.col("gene").fill_null("?"),
+                pl.col("consequence").fill_null("?"),
+                pl.col("label").fill_null("?"),
+                pl.col("score").fill_null(0.0),
+            )
         )
-    )
 
-    edges = pl.DataFrame({
-        "src_i": torch.arange(n_emb).repeat_interleave(K_NEIGHBORS).to(torch.int32).numpy(),
-        "dst_i": topk_i.ravel().astype(np.int32),
-        "similarity": topk_v.ravel().round(4).astype(np.float32),
-    })
-    nb = (edges
-          .join(emb_df.select(
-              pl.col("emb_i").alias("dst_i"), pl.col("variant_id").alias("id"),
-              "gene", "consequence", "label", "score",
-          ), on="dst_i", how="left")
-          .join(emb_df.select(
-              pl.col("emb_i").alias("src_i"), pl.col("variant_id").alias("src_vid"),
-          ), on="src_i", how="left")
-          .drop("src_i", "dst_i"))
+        edges = pl.DataFrame({
+            "src_i": torch.arange(n_emb).repeat_interleave(K_NEIGHBORS).to(torch.int32).numpy(),
+            "dst_i": topk_i.ravel().astype(np.int32),
+            "similarity": topk_v.ravel().round(4).astype(np.float32),
+        })
+        nb = (edges
+              .join(emb_df.select(
+                  pl.col("emb_i").alias("dst_i"), pl.col("variant_id").alias("id"),
+                  "gene", "consequence", "label", "score",
+              ), on="dst_i", how="left")
+              .join(emb_df.select(
+                  pl.col("emb_i").alias("src_i"), pl.col("variant_id").alias("src_vid"),
+              ), on="src_i", how="left")
+              .drop("src_i", "dst_i"))
 
-    nb_grouped = nb.group_by("src_vid").agg(
-        pl.struct("id", "gene", "consequence", "label", "score", "similarity").alias("neighbors"))
-    nb_map = dict(zip(nb_grouped["src_vid"].to_list(), nb_grouped["neighbors"].to_list(), strict=True))
-    _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
+        nb_grouped = nb.group_by("src_vid").agg(
+            pl.struct("id", "gene", "consequence", "label", "score", "similarity").alias("neighbors"))
+        nb_map = dict(zip(nb_grouped["src_vid"].to_list(), nb_grouped["neighbors"].to_list(), strict=True))
+        _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
 
     # ── UMAP ─────────────────────────────────────────────────────────────
     if args.skip_umap:
@@ -647,12 +455,14 @@ def main() -> None:
             "labels": [LABEL_TO_IDX.get(lab, 2) for lab in umap_sub["label"].to_list()],
             "gene_list": gene_list,
         } if umap_coords is not None else None,
-        "distribution": {
-            "benign": prebin(scores_t[ben_mask], 80),
-            "pathogenic": prebin(scores_t[path_mask], 80),
-            "bins": 80,
+        "distributions": {
+            "pathogenic": {
+                "benign": prebin(scores_t[ben_mask], 80),
+                "pathogenic": prebin(scores_t[path_mask], 80),
+                "bins": 80,
+            },
+            **hh,
         },
-        "head_distributions": hh,
         "eval": eval_metrics,
         "heads": {"disruption": auto_group(set(disruption_heads)), "effect": auto_group(set(effect_heads))},
         "display": {h: display_name(h, domain_cache) for h in all_head_names},

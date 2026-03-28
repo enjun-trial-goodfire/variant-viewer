@@ -68,9 +68,15 @@ def _scores_from_logits(
     logits_dict: dict[str, torch.Tensor],
     probe: MultiHeadCovProbeV2,
     prefix: str = "",
-) -> dict[str, list[float]]:
-    """Extract per-head scores from logits with optional column prefix."""
-    result: dict[str, list[float]] = {}
+    class_labels: dict[str, tuple[str, ...]] | None = None,
+) -> dict[str, list]:
+    """Extract per-head scores from logits with optional column prefix.
+
+    Args:
+        class_labels: Optional {head_name: (label_0, label_1, ...)} for multi-class
+            heads. If provided, writes the string label instead of the integer argmax.
+    """
+    result: dict[str, list] = {}
     for name, logits in logits_dict.items():
         head = probe.heads[name]
         if head.kind == "continuous":
@@ -82,7 +88,14 @@ def _scores_from_logits(
                 torch.softmax(logits, dim=-1)[:, 1].cpu().tolist()
             )
         else:
-            result.setdefault(f"{prefix}pred_{name}", []).extend(logits.argmax(-1).cpu().tolist())
+            indices = logits.argmax(-1).cpu().tolist()
+            labels = class_labels.get(name) if class_labels else None
+            if labels:
+                result.setdefault(f"{prefix}pred_{name}", []).extend(
+                    labels[i] if i < len(labels) else "unknown" for i in indices
+                )
+            else:
+                result.setdefault(f"{prefix}pred_{name}", []).extend(indices)
     return result
 
 
@@ -108,6 +121,17 @@ def main() -> None:
 
     d_hidden = probe.d_hidden
     logger.info(f"Probe: {len(disruption_heads)} disruption + {len(effect_heads)} effect heads, d_hidden={d_hidden}")
+
+    # Build class label lookup for multi-class heads (consequence, aa_swap)
+    # so scores.feather writes human-readable strings instead of integer argmax.
+    class_labels: dict[str, tuple[str, ...]] = {}
+    for name, spec in probe.heads.items():
+        if spec.kind == "categorical" and spec.n_classes > 2:
+            labels_key = f"{name}_classes"
+            if labels_key in config:
+                class_labels[name] = tuple(config[labels_key])
+    if class_labels:
+        logger.info(f"Class labels for {len(class_labels)} multi-class heads: {list(class_labels.keys())}")
 
     # ── Resolve IDs + shard ───────────────────────────────────────────────
     storage = FilesystemStorage(args.activations)
@@ -181,17 +205,20 @@ def main() -> None:
             # Effect heads → score_* from diff view
             for k, v in _scores_from_logits(
                 {h: diff_logits[h] for h in effect_heads}, probe,
+                class_labels=class_labels,
             ).items():
                 effect_scores.setdefault(k, []).extend(v)
 
             # Disruption heads → ref_score_* from ref view, var_score_* from var view
             for k, v in _scores_from_logits(
                 {h: ref_logits[h] for h in disruption_heads}, probe, "ref_",
+                class_labels=class_labels,
             ).items():
                 ref_scores.setdefault(k, []).extend(v)
 
             for k, v in _scores_from_logits(
                 {h: var_logits[h] for h in disruption_heads}, probe, "var_",
+                class_labels=class_labels,
             ).items():
                 var_scores.setdefault(k, []).extend(v)
 

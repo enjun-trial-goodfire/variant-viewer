@@ -604,7 +604,7 @@ function renderVariant(v) {
   const hgvsc = v.hgvsc ? v.hgvsc.split(':').pop() : null;
   const posFormatted = v.pos != null ? v.pos.toLocaleString() : '?';
   const exonStr = v.exon ? `exon ${v.exon}` : '';
-  const domainStr = v.domains ? (typeof v.domains === 'string' ? v.domains.split(';').slice(0, 2).map(d => d.split(':').pop()).join(', ') : '') : '';
+  const domainStr = Array.isArray(v.domains) ? v.domains.slice(0, 2).map(d => d.name || d.id).join(', ') : '';
   const contextParts = [humanConsequence(v.consequence), exonStr, domainStr].filter(Boolean);
 
   // gnomAD frequency formatting
@@ -705,7 +705,7 @@ function renderVariant(v) {
         <div style="width:40px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:var(--text-secondary);flex-shrink:0">${pct}%</div>
       </div>`;
     }
-    const shownPct = attrHeads.reduce((s, h) => s + (h.coefficient ?? Math.abs(h.contribution ?? 0)), 0) * 100;
+    const shownPct = attrHeads.reduce((s, h) => s + (h.coefficient ?? 0), 0) * 100;
     const otherPct = 100 - shownPct;
     const summary = shownPct > 100
       ? `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads counteract <b>${Math.abs(otherPct).toFixed(0)}%</b>`
