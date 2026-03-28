@@ -41,7 +41,7 @@ from paths import (
     load_vep, load_domain_names, resolve_domains, load_metadata,
 )
 
-ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations_v9.feather"
+ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations.feather"
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS = ARTIFACTS / "clinvar_evo2_vus"
 PROBE = "probe_v9"
@@ -78,10 +78,10 @@ def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Build variant viewer static site")
-    parser.add_argument("output", nargs="?", default="webapp/build", help="Output directory")
-    parser.add_argument("--no-sync", action="store_true", help="Write to /tmp, skip rsync")
-    parser.add_argument("--skip-umap", action="store_true", help="Skip UMAP computation (reuse from previous build)")
-    parser.add_argument("--skip-neighbors", action="store_true", help="Skip neighbor computation")
+    parser.add_argument("output", nargs="?", default=None, help="Output directory (default: /tmp staging)")
+    parser.add_argument("--sync", action="store_true", help="Rsync staging to output dir (default: write to /tmp only)")
+    parser.add_argument("--umap", action="store_true", help="Compute UMAP embedding (slow, ~40s)")
+    parser.add_argument("--neighbors", action="store_true", help="Compute nearest neighbors (requires GPU)")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -198,8 +198,8 @@ def main() -> None:
             ids.extend(batch.sequence_ids)
         return torch.cat(embeddings), ids
 
-    if args.skip_neighbors and args.skip_umap:
-        _t("Skipping embeddings (--skip-neighbors --skip-umap)")
+    if not args.neighbors and not args.umap:
+        _t("Skipping embeddings (use --neighbors or --umap to enable)")
         nb_map = {}
         emb_df = None
     else:
@@ -209,8 +209,8 @@ def main() -> None:
         emb_ids = ids_l + ids_v
         n_emb = len(emb_ids)
 
-    if args.skip_neighbors:
-        _t("Skipping neighbors (--skip-neighbors)")
+    if not args.neighbors:
+        _t("Skipping neighbors (use --neighbors to enable)")
         nb_map = {}
     else:
         _t("GPU cosine similarity...")
@@ -228,7 +228,7 @@ def main() -> None:
         topk_v = torch.cat(topk_values).numpy()
         del emb_gpu
 
-    if not args.skip_neighbors:
+    if args.neighbors:
         _t("Building neighbor table...")
         emb_df = (
             pl.DataFrame({"emb_i": range(n_emb), "variant_id": emb_ids})
@@ -265,8 +265,8 @@ def main() -> None:
         _t(f"Neighbors: {nb.height:,} edges → {nb_grouped.height:,} variants")
 
     # ── UMAP ─────────────────────────────────────────────────────────────
-    if args.skip_umap:
-        _t("Skipping UMAP (--skip-umap)")
+    if not args.umap:
+        _t("Skipping UMAP (use --umap to enable)")
         umap_coords = None
         umap_sub = None
         gene_list = []
@@ -347,20 +347,18 @@ def main() -> None:
     for i in tqdm(range(n), desc="write", mininterval=5):
         vid = col_data["variant_id"][i]
 
-        # Flat value dicts (schema v2: values only, no display names or grouping)
+        # Only include heads with meaningful delta
         disruption = {}
         for h in disruption_heads:
             r = ref_d[h][i]
-            if r is not None:
-                va = var_d[h][i] if var_d[h][i] is not None else r
-                disruption[h] = [r, va]
+            if r is None:
+                continue
+            va = var_d[h][i] if var_d[h][i] is not None else r
+            delta = round(va - r, 4)
+            if abs(delta) > 0.01:
+                disruption[h] = delta
 
-        effect = {}
-        for h in effect_heads:
-            ev = eff_d[h][i]
-            if ev is not None:
-                effect[h] = ev
-
+        effect = {h: eff_d[h][i] for h in effect_heads if eff_d[h][i] is not None}
         gt = {h: v for h, col in gt_d.items() if (v := col[i]) is not None and v > 0}
 
         neighbors = nb_map.get(vid, [])
@@ -422,10 +420,18 @@ def main() -> None:
     ben_mask = torch.from_numpy((df["label"] == "benign").to_numpy())
     path_mask = torch.from_numpy((df["label"] == "pathogenic").to_numpy())
 
-    # Stack all head scores into a matrix for vectorized histogram computation
+    # Disruption histograms use delta (var - ref), effect histograms use raw scores
+    delta_exprs = [(pl.col(vc) - pl.col(rc)).alias(f"delta_{h}")
+                   for rc, vc, h in zip(ref_cols, var_cols, disruption_heads)]
+    delta_cols = [f"delta_{h}" for h in disruption_heads]
+    df_hist = df.with_columns(delta_exprs)
     score_matrix = torch.from_numpy(
-        df.select(ref_cols + eff_cols).to_numpy(allow_copy=True).T
+        df_hist.select(delta_cols + eff_cols).to_numpy(allow_copy=True).T
     ).float()  # (n_heads, n_variants)
+
+    n_disruption = len(disruption_heads)
+    # Remap delta heads from [-1,1] → [0,1] for histogram binning
+    score_matrix[:n_disruption] = (score_matrix[:n_disruption] + 1) / 2
 
     hh = {}
     for j, head_name in enumerate(all_head_names):
@@ -433,6 +439,7 @@ def main() -> None:
             "benign": prebin(score_matrix[j][ben_mask], 40),
             "pathogenic": prebin(score_matrix[j][path_mask], 40),
             "bins": 40,
+            "range": [-1, 1] if j < n_disruption else [0, 1],
         }
 
     eval_metrics = {}
@@ -498,17 +505,16 @@ def main() -> None:
             shutil.copy2(f, interp_dst / f.name)
 
     # ── Sync or serve from staging ───────────────────────────────────────
-    out = Path(args.output)
-
-    if args.no_sync:
-        _t(f"Done. {n:,} variants in {staging} (--no-sync, skipping rsync)")
-        print(f"STAGING_DIR={staging}")
-    else:
+    if args.sync and args.output:
+        out = Path(args.output)
         _t(f"Syncing to {out}...")
         out.mkdir(parents=True, exist_ok=True)
         subprocess.run(["rsync", "-a", "--delete", f"{staging}/", f"{out}/"], check=True)
         shutil.rmtree(staging)
-        _t(f"Done. {n:,} variants.")
+        _t(f"Done. {n:,} variants in {out}")
+    else:
+        _t(f"Done. {n:,} variants in {staging}")
+        print(f"STAGING_DIR={staging}")
 
 
 if __name__ == "__main__":

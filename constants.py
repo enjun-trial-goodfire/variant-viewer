@@ -33,5 +33,5 @@ def calibration_text(score: float) -> str:
     """Human-readable calibration context for a pathogenicity score."""
     for (lo, hi), rate in CALIBRATION.items():
         if lo <= score < hi:
-            return f"Calibration: among labeled variants scoring {lo:.1f}\u2013{hi:.1f}, {rate:.0f}% are pathogenic."
+            return f"Calibration: among labeled variants scoring {lo*100:.0f}\u2013{hi*100:.0f}%, {rate:.0f}% are pathogenic."
     return ""

@@ -76,7 +76,7 @@ def build_prompt(v: dict) -> str:
     if v.get("disease"):
         lines.append(f"Disease: {v['disease']}")
 
-    lines.append(f"**Evo2 pathogenicity: {score:.3f}**")
+    lines.append(f"**Predicted pathogenicity: {score * 100:.0f}%**")
     cal = calibration_text(score)
     if cal:
         lines.append(cal)
@@ -119,9 +119,9 @@ def build_prompt(v: dict) -> str:
             gt_val = gt.get(name)
             gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else "\u2014"
             if kind == "disruption" and name in disruption:
-                ref_val, var_val = disruption[name]
-                val_str = f"{var_val:.3f}"
-                delta_str = f"{ref_val:.3f}\u2192{var_val:.3f} (\u0394={var_val - ref_val:+.3f})"
+                delta = disruption[name] if isinstance(disruption[name], (int, float)) else disruption[name][1] - disruption[name][0]
+                val_str = f"\u0394={delta:+.3f}"
+                delta_str = val_str
             elif kind == "effect" and name in effect:
                 val_str = f"{effect[name]:.3f}"
             lines.append(f"| {display_name(name)} | {kind} | {coeff:+.4f} | {val_str} | {delta_str} | {gt_val} |")
@@ -133,7 +133,7 @@ def build_prompt(v: dict) -> str:
         lines.append(f"### Nearest Neighbors: {v.get('nP', 0)} pathogenic, {v.get('nB', 0)} benign, {v.get('nV', 0)} VUS")
         for nb in neighbors[:5]:
             sim = nb.get("similarity", 0)
-            lines.append(f"- {nb['gene']} ({nb['label']}, score={nb['score']:.3f}, similarity={sim:.3f})")
+            lines.append(f"- {nb['gene']} ({nb['label']}, pathogenicity={nb['score'] * 100:.0f}%, similarity={sim * 100:.0f}%)")
         lines.append("")
 
     # Additional context
