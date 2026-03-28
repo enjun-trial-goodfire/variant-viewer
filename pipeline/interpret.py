@@ -17,7 +17,6 @@ import json
 import time
 from pathlib import Path
 
-import anthropic
 import numpy as np
 import polars as pl
 import torch
@@ -387,7 +386,7 @@ def build_prompt(vid: str, data: dict) -> str:
 # API calling
 # ---------------------------------------------------------------------------
 async def interpret_one(
-    vid: str, data: dict, client: anthropic.AsyncAnthropic, dry_run: bool = False,
+    vid: str, data: dict, client, dry_run: bool = False,
 ) -> dict:
     prompt = build_prompt(vid, data)
     if dry_run:
@@ -437,6 +436,7 @@ async def interpret_one(
 
 
 async def batch(vids: list[str], data: dict, concurrency: int, dry_run: bool) -> list[dict]:
+    import anthropic
     client = anthropic.AsyncAnthropic()
     sem = asyncio.Semaphore(concurrency)
     results = []

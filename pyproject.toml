@@ -22,6 +22,8 @@ dependencies = [
     "pyyaml>=6.0",
     "goodfire-core>=0.3.0",
     "scipy>=1.14",
+    "starlette>=0.45",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
@@ -32,7 +34,7 @@ dev = ["pytest>=9.0"]
 
 [project.optional-dependencies]
 interpret = ["anthropic"]
-serve = ["starlette>=0.45", "uvicorn[standard]", "anthropic"]
+serve = ["anthropic"]
 
 [tool.setuptools]
 packages = ["probe"]

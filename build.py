@@ -97,6 +97,22 @@ def main(
     def _t(msg: str) -> None:
         logger.info(f"[{time.time() - t0:.1f}s] {msg}")
 
+    # ── Validate inputs ──────────────────────────────────────────────────
+    missing = []
+    for path, desc in [
+        (LABELED / PROBE / "scores.feather", f"Labeled scores ({PROBE})"),
+        (VUS / PROBE / "scores.feather", f"VUS scores ({PROBE})"),
+        (ANNOTATIONS, "Annotations"),
+        (MAYO_DATA / "clinvar" / "deconfounded-full" / "metadata.feather", "Labeled metadata"),
+        (MAYO_DATA / "gencode" / "genes.feather", "GENCODE genes"),
+    ]:
+        if not path.exists():
+            missing.append(f"  {desc}: {path}")
+    if missing:
+        raise FileNotFoundError(
+            f"Missing required data files:\n" + "\n".join(missing) + "\n\nRun: uv run vv check"
+        )
+
     # ── Load ─────────────────────────────────────────────────────────────
     _t("Loading...")
 
