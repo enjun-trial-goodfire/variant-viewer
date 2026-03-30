@@ -306,20 +306,25 @@ function evalBadge(head) {
 // ── Data loading ─────────────────────────────────────────────────────
 // global.json (~300KB): distributions, heads, display, eval. Always needed.
 // umap.json (~2.3MB): only loaded when the landing page is shown.
-const globalReady = fetch(`${CONFIG.STATIC_BASE}/global.json`).then(r => r.json()).then(g => {
+const staticPrefix = CONFIG.STATIC_BASE ? CONFIG.STATIC_BASE + '/' : '';
+const globalReady = fetch(`${staticPrefix}global.json`).then(r => r.json()).then(g => {
   distributions = g.distributions;
   globalData = { heads: g.heads, display: g.display, eval: g.eval };
+  if (g.umap) umapData = g.umap;
   if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
 });
 let umapReady = null;
 function ensureUmap() {
-  umapReady ??= fetch(`${CONFIG.STATIC_BASE}/umap.json`).then(r => r.ok ? r.json() : null).then(u => { umapData = u; });
+  umapReady ??= fetch(`${staticPrefix}umap.json`).then(r => r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : null).then(u => { if (u) umapData = u; });
   return umapReady;
 }
 
 // Static mode: client-side search via search.json
 function ensureSearchIndex() {
-  searchIndexPromise ??= fetch('search.json').then(r => r.json()).then(idx => { searchIndex = idx; });
+  searchIndexPromise ??= fetch('search.json').then(r => {
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return {};
+    return r.json();
+  }).then(idx => { searchIndex = idx; });
   return searchIndexPromise;
 }
 
