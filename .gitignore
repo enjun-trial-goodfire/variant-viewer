@@ -12,3 +12,5 @@ outputs/
 wandb/
 .env
 terraform/.terraform/
+terraform/modules/**/*.zip
+config.js

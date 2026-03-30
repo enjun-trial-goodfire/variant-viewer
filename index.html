@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Variant Effect Viewer</title>
+<script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root {
@@ -213,6 +214,15 @@ tr.benign td { background: #f5f8fe; }
 <div id="umap-tooltip"></div>
 
 <script>
+// ── Config ──────────────────────────────────────────────────────────
+// config.js (if present) sets window.__APP_CONFIG__ before this runs.
+// API_BASE set → API mode (deployed, hits API Gateway + DynamoDB)
+// API_BASE empty → static mode (local dev, reads JSON files via serve.py)
+const CONFIG = Object.assign({
+  STATIC_BASE: '',
+  API_BASE: '',
+}, window.__APP_CONFIG__ || {});
+
 // ── State ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('search');
 const searchResults = document.getElementById('search-results');
@@ -296,20 +306,30 @@ function evalBadge(head) {
 // ── Data loading ─────────────────────────────────────────────────────
 // global.json (~300KB): distributions, heads, display, eval. Always needed.
 // umap.json (~2.3MB): only loaded when the landing page is shown.
-const globalReady = fetch('global.json').then(r => r.json()).then(g => {
+const globalReady = fetch(`${CONFIG.STATIC_BASE}/global.json`).then(r => r.json()).then(g => {
   distributions = g.distributions;
   globalData = { heads: g.heads, display: g.display, eval: g.eval };
   if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
 });
 let umapReady = null;
 function ensureUmap() {
-  umapReady ??= fetch('umap.json').then(r => r.ok ? r.json() : null).then(u => { umapData = u; });
+  umapReady ??= fetch(`${CONFIG.STATIC_BASE}/umap.json`).then(r => r.ok ? r.json() : null).then(u => { umapData = u; });
   return umapReady;
 }
 
+// Static mode: client-side search via search.json
 function ensureSearchIndex() {
   searchIndexPromise ??= fetch('search.json').then(r => r.json()).then(idx => { searchIndex = idx; });
   return searchIndexPromise;
+}
+
+// API mode: server-side search via GET /variants/search
+async function apiSearch(query) {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const resp = await fetch(`${CONFIG.API_BASE}/variants/search?q=${encodeURIComponent(q)}`);
+  if (!resp.ok) return [];
+  return resp.json();
 }
 
 // ── Routing ──────────────────────────────────────────────────────────
@@ -349,14 +369,22 @@ searchInput.addEventListener('input', () => {
     searchResults.classList.remove('visible');
     navigate(`variant/${q}`); return;
   }
-  searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+  if (CONFIG.API_BASE) {
+    searchTimeout = setTimeout(() => apiSearch(q).then(r => renderSearchResults(r)), 300);
+  } else {
+    searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+  }
 });
 searchInput.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const q = searchInput.value.trim();
   searchResults.classList.remove('visible');
   if (q.includes(':') && q.split(':').length >= 4) navigate(`variant/${q}`);
-  else ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+  else if (CONFIG.API_BASE) {
+    apiSearch(q).then(r => { if (r.length) navigate(`variant/${r[0].v}`); });
+  } else {
+    ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+  }
 });
 document.addEventListener('click', e => {
   if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
@@ -600,7 +628,10 @@ function loadVariant(variantId) {
   searchResults.classList.remove('visible');
   tooltip.style.display = 'none';
   searchInput.value = variantId;
-  const variantReady = fetch(`variants/${safeVariantId(variantId)}.json`)
+  const variantUrl = CONFIG.API_BASE
+    ? `${CONFIG.API_BASE}/variants/${encodeURIComponent(variantId)}`
+    : `variants/${safeVariantId(variantId)}.json`;
+  const variantReady = fetch(variantUrl)
     .then(r => { if (!r.ok) throw new Error(); return r.json(); });
   Promise.all([variantReady, globalReady])
     .then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })

@@ -1,0 +1,7 @@
+// Copy this file to config.js and set API_BASE to your API Gateway URL.
+// config.js is loaded by index.html before the main script.
+// If config.js is absent or API_BASE is empty, the app runs in static mode
+// (local dev via serve.py, reading JSON files directly).
+window.__APP_CONFIG__ = {
+  API_BASE: 'https://your-api-id.execute-api.us-east-1.amazonaws.com',
+};
