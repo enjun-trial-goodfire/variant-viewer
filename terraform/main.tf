@@ -33,12 +33,14 @@ module "cloudfront" {
   s3_bucket_id          = module.s3.bucket_id
 }
 
-# ── Steps 3-6: DynamoDB, Lambda, API Gateway (uncomment when ready) ──────
-#
-# module "dynamodb" {
-#   source   = "./modules/dynamodb"
-#   app_name = var.app_name
-# }
+# ── Step 3: DynamoDB ─────────────────────────────────────────────────────
+
+module "dynamodb" {
+  source   = "./modules/dynamodb"
+  app_name = var.app_name
+}
+
+# ── Steps 5-6: Lambda, API Gateway (uncomment when ready) ───────────────
 #
 # module "lambda_api" {
 #   source         = "./modules/lambda_api"

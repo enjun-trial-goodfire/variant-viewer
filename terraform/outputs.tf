@@ -8,14 +8,14 @@ output "frontend_bucket" {
   value       = module.s3.bucket_id
 }
 
-# Uncomment when DynamoDB and API Gateway modules are enabled:
+output "dynamodb_table_name" {
+  description = "DynamoDB variants table name"
+  value       = module.dynamodb.table_name
+}
+
+# Uncomment when API Gateway module is enabled:
 #
 # output "api_gateway_url" {
 #   description = "API Gateway endpoint URL"
 #   value       = module.api_gateway.api_url
-# }
-#
-# output "dynamodb_table_name" {
-#   description = "DynamoDB variants table name"
-#   value       = module.dynamodb.table_name
 # }
