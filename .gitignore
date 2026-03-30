@@ -11,3 +11,4 @@ builds/
 outputs/
 wandb/
 .env
+terraform/.terraform/

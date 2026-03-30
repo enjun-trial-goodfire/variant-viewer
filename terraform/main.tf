@@ -9,10 +9,9 @@ terraform {
   }
 
   backend "s3" {
-    # Configure via backend.hcl or CLI flags:
-    #   bucket = "your-terraform-state-bucket"
-    #   key    = "variant-viewer/terraform.tfstate"
-    #   region = "us-east-1"
+    bucket = "variant-viewer-terraform-state"
+    key    = "variant-viewer/terraform.tfstate"
+    region = "us-east-1"
   }
 }
 
