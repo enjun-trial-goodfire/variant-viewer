@@ -20,28 +20,11 @@ provider "aws" {
   region = var.aws_region
 }
 
+# ── Step 2: Static frontend hosting ──────────────────────────────────────
+
 module "s3" {
   source   = "./modules/s3"
   app_name = var.app_name
-}
-
-module "dynamodb" {
-  source   = "./modules/dynamodb"
-  app_name = var.app_name
-}
-
-module "lambda_api" {
-  source         = "./modules/lambda_api"
-  app_name       = var.app_name
-  dynamodb_table = module.dynamodb.table_name
-  dynamodb_arn   = module.dynamodb.table_arn
-}
-
-module "api_gateway" {
-  source             = "./modules/api_gateway"
-  app_name           = var.app_name
-  lambda_invoke_arn  = module.lambda_api.invoke_arn
-  lambda_function_name = module.lambda_api.function_name
 }
 
 module "cloudfront" {
@@ -49,5 +32,25 @@ module "cloudfront" {
   app_name              = var.app_name
   s3_bucket_domain_name = module.s3.bucket_regional_domain_name
   s3_bucket_id          = module.s3.bucket_id
-  api_gateway_url       = module.api_gateway.api_url
 }
+
+# ── Steps 3-6: DynamoDB, Lambda, API Gateway (uncomment when ready) ──────
+#
+# module "dynamodb" {
+#   source   = "./modules/dynamodb"
+#   app_name = var.app_name
+# }
+#
+# module "lambda_api" {
+#   source         = "./modules/lambda_api"
+#   app_name       = var.app_name
+#   dynamodb_table = module.dynamodb.table_name
+#   dynamodb_arn   = module.dynamodb.table_arn
+# }
+#
+# module "api_gateway" {
+#   source               = "./modules/api_gateway"
+#   app_name             = var.app_name
+#   lambda_invoke_arn    = module.lambda_api.invoke_arn
+#   lambda_function_name = module.lambda_api.function_name
+# }

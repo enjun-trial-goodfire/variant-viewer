@@ -8,11 +8,6 @@ variable "s3_bucket_domain_name" {
 }
 
 variable "s3_bucket_id" {
-  description = "S3 bucket ID for OAC policy"
-  type        = string
-}
-
-variable "api_gateway_url" {
-  description = "API Gateway invoke URL for API origin"
+  description = "S3 bucket ID for bucket policy"
   type        = string
 }
