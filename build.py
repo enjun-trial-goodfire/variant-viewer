@@ -371,42 +371,49 @@ def _build_variant_dict(
     n_p = sum(1 for nb in nbs if "pathogenic" in nb.get("label", ""))
     n_b = sum(1 for nb in nbs if "benign" in nb.get("label", ""))
 
+    # Schema contract:
+    #   Strings: always "" (never null). Empty string = absent.
+    #   Lists/dicts: always []/{}. Empty = absent.
+    #   Sparse dicts (disruption/effect/gt): missing key = 0.
+    #   Genuinely nullable: loeuf, gnomad, allele_id, gene_id, n_submissions, last_evaluated.
     return {
         "id": vid,
-        "gene": col_data["gene_name"][i],
-        "chrom": col_data["chrom"][i], "pos": col_data["pos"][i],
-        "ref": col_data["ref"][i], "alt": col_data["alt"][i],
+        "gene": col_data["gene_name"][i] or "",
+        "chrom": col_data["chrom"][i] or "",
+        "pos": col_data["pos"][i],
+        "ref": col_data["ref"][i] or "",
+        "alt": col_data["alt"][i] or "",
         "vcf_pos": col_data["vcf_pos"][i],
-        "gene_strand": col_data["gene_strand"][i],
-        "consequence": col_data["consequence"][i],
-        "substitution": col_data["substitution"][i],
-        "label": col_data["label"][i],
-        "significance": col_data["clinical_significance"][i],
-        "stars": col_data["stars"][i],
-        "disease": col_data["disease_name"][i],
+        "gene_strand": col_data["gene_strand"][i] or "",
+        "consequence": col_data["consequence"][i] or "",
+        "substitution": col_data["substitution"][i] or "",
+        "label": col_data["label"][i] or "",
+        "significance": col_data["clinical_significance"][i] or "",
+        "stars": col_data["stars"][i] or 0,
+        "disease": col_data["disease_name"][i] or "",
         "score": col_data["score_pathogenic"][i],
-        "rs_id": col_data["rs_id"][i],
-        "allele_id": col_data["allele_id"][i],
-        "gene_id": col_data["gene_id"][i],
-        "hgvsc": vep_data["hgvsc"][i],
-        "hgvsp": vep_data["hgvsp"][i],
-        "impact": vep_data["impact"][i],
-        "exon": vep_data["exon"][i],
-        "transcript": vep_data["transcript_id"][i],
-        "swissprot": vep_data["swissprot"][i],
-        "domains": resolve_domains(vep_data["domains"][i], domain_cache),
-        "loeuf": vep_data["loeuf"][i],
-        "gnomad": vep_data["gnomade"][i],
+        "rs_id": col_data["rs_id"][i] or "",
+        "allele_id": col_data["allele_id"][i],         # nullable
+        "gene_id": col_data["gene_id"][i] or "",
+        "hgvsc": vep_data["hgvsc"][i] or "",
+        "hgvsp": vep_data["hgvsp"][i] or "",
+        "impact": vep_data["impact"][i] or "",
+        "exon": vep_data["exon"][i] or "",
+        "transcript": vep_data["transcript_id"][i] or "",
+        "swissprot": vep_data["swissprot"][i] or "",
+        "domains": resolve_domains(vep_data["domains"][i], domain_cache) or [],
+        "loeuf": vep_data["loeuf"][i],                  # nullable
+        "gnomad": vep_data["gnomade"][i],                # nullable
         "gnomad_pop": {k: v for k, col in gnomad_pops.items() if (v := col[i]) is not None and v > 0},
-        "variation_id": clinvar_data["variation_id"][i],
-        "cytogenetic": clinvar_data["cytogenetic"][i],
-        "review_status": clinvar_data["review_status"][i],
+        "variation_id": clinvar_data["variation_id"][i] or "",
+        "cytogenetic": clinvar_data["cytogenetic"][i] or "",
+        "review_status": clinvar_data["review_status"][i] or "",
         "acmg": [c for c in (clinvar_data["acmg_codes"][i] or "").split(";") if c],
-        "n_submissions": clinvar_data["n_submissions"][i],
+        "n_submissions": clinvar_data["n_submissions"][i],  # nullable
         "submitters": [s for s in (clinvar_data["submitters"][i] or "").split(";") if s],
-        "last_evaluated": clinvar_data["last_evaluated"][i],
+        "last_evaluated": clinvar_data["last_evaluated"][i],  # nullable
         "clinical_features": [f for f in (clinvar_data["clinical_features"][i] or "").split(";") if f and f != "not provided"],
-        "origin": clinvar_data["origin"][i],
+        "origin": clinvar_data["origin"][i] or "",
         "disruption": disruption,
         "effect": effect,
         "gt": gt,

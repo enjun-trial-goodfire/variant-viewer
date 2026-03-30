@@ -1,4 +1,4 @@
-"""Train v11 multihead covariance probe: reference pretrain + variant finetune.
+"""Train multihead covariance probe: reference pretrain + variant finetune.
 
 Phase 1 (pretrain): Train local+global ref heads on 190M single-token SAE
   activations. The covariance probe degenerates to a bilinear form on single
@@ -135,7 +135,7 @@ def pretrain(args, device, rank, world_size):
         # Forward: single token → covariance degenerates to bilinear
         # acts: [B, 8192], probe expects [B, K, d] so unsqueeze K=1
         logits = probe(acts.unsqueeze(1))
-        loss = multihead_loss(logits, labels, specs_tuple, focal_gamma=args.focal_gamma)
+        loss = multihead_loss(logits, labels, specs_tuple, focal_gamma=args.focal_gamma, class_balance=True)
 
         optimizer.zero_grad()
         loss.backward()
@@ -289,11 +289,11 @@ def finetune(args, device, rank, world_size):
 
             # Pass 1: diff → effect heads
             diff_logits = probe(unified_diff(raw).float())
-            loss_diff = multihead_loss(diff_logits, diff_labels, specs_tuple, focal_gamma=args.focal_gamma)
+            loss_diff = multihead_loss(diff_logits, diff_labels, specs_tuple, focal_gamma=args.focal_gamma, class_balance=True)
 
             # Pass 2: ref → global ref heads (locals frozen)
             ref_logits = probe(unified_ref(raw).float())
-            loss_ref = multihead_loss(ref_logits, ref_labels, specs_tuple, focal_gamma=args.focal_gamma)
+            loss_ref = multihead_loss(ref_logits, ref_labels, specs_tuple, focal_gamma=args.focal_gamma, class_balance=True)
 
             loss = loss_diff + loss_ref
             optimizer.zero_grad()
@@ -378,12 +378,12 @@ def _init_distributed() -> tuple[torch.device, int, int, bool]:
 
 # ── CLI ───────────────────────────────────────────────────────────────────
 
-app = typer.Typer(help="Probe v11 training: reference pretrain + variant finetune")
+app = typer.Typer(help="Probe training: reference pretrain + variant finetune")
 
 
 @app.command()
 def pretrain_cmd(
-    name: str = typer.Option("probe-v11-pretrain", help="W&B run name"),
+    name: str = typer.Option("probe-next-pretrain", help="W&B run name"),
     activations: Path = typer.Option(DECONFOUNDED, help="Activations storage directory"),
     d_model: int = typer.Option(8192),
     d_hidden: int = typer.Option(64),
@@ -408,7 +408,7 @@ def pretrain_cmd(
 
 @app.command()
 def finetune_cmd(
-    name: str = typer.Option("probe-v11-finetune", help="W&B run name"),
+    name: str = typer.Option("probe-next-finetune", help="W&B run name"),
     activations: Path = typer.Option(DECONFOUNDED, help="Activations storage directory"),
     checkpoint: Path = typer.Option(None, help="Pretrain checkpoint (.pt)"),
     preset: str = typer.Option("deconfounded-full"),

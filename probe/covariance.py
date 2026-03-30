@@ -221,11 +221,14 @@ def multihead_loss_v2(
     labels: Tensor,
     head_specs: tuple[HeadSpec, ...],
     focal_gamma: float = 0.0,
+    class_balance: bool = False,
 ) -> Tensor:
     """Multi-task loss with mixed categorical + continuous heads.
 
     Batches heads by (kind, n_classes, weight) to minimize kernel launches.
     Binary heads use focal loss when ``focal_gamma > 0`` (recommended: 3.0).
+    When ``class_balance`` is True, binary/categorical heads use inverse-frequency
+    class weights to handle imbalanced labels.
 
     Args:
         logits: Packed logits [B, sum(head_outputs)].
@@ -234,11 +237,11 @@ def multihead_loss_v2(
             - Continuous heads: float value in [0, 1], NaN = masked
         head_specs: Tuple of HeadSpec for each head.
         focal_gamma: Focal loss gamma for binary heads (0 = standard CE).
+        class_balance: Compute inverse-frequency weights for binary/categorical heads.
 
     Returns:
         Scalar weighted loss.
     """
-    # Group heads by (kind, n_classes, weight) for batched computation
     groups: dict[tuple[str, int, float], list[tuple[int, int]]] = {}
     offset = 0
     for i, spec in enumerate(head_specs):
@@ -252,37 +255,40 @@ def multihead_loss_v2(
         head_indices = [m[0] for m in members]
         logit_offsets = [m[1] for m in members]
 
-        # Stack logits: [B, n_heads_in_group, n_classes]
         group_logits = torch.stack(
             [logits[:, o:o + n_classes] for o in logit_offsets], dim=1,
         )
-        group_labels = labels[:, head_indices]  # [B, n_heads_in_group]
+        group_labels = labels[:, head_indices]
 
         if kind == "continuous":
-            # Valid mask: not NaN
-            valid = ~torch.isnan(group_labels)  # [B, n_heads_in_group]
+            valid = ~torch.isnan(group_labels)
             n_valid = valid.sum()
             if n_valid == 0:
                 continue
-            # Soft cross-entropy on valid entries
-            flat_logits = group_logits[valid]  # [N_valid, n_bins]
-            flat_targets = group_labels[valid]  # [N_valid]
+            flat_logits = group_logits[valid]
+            flat_targets = group_labels[valid]
             soft_targets = create_soft_bins(flat_targets.unsqueeze(-1), n_bins=n_classes, sigma=0.05)
-            soft_targets = soft_targets.squeeze(1)  # [N_valid, n_bins]
+            soft_targets = soft_targets.squeeze(1)
             log_probs = torch.nn.functional.log_softmax(flat_logits, dim=-1)
             loss = -(soft_targets * log_probs).sum(dim=-1).mean()
         else:
-            # Valid mask: label >= 0
-            valid = group_labels >= 0  # [B, n_heads_in_group]
+            valid = group_labels >= 0
             n_valid = valid.sum()
             if n_valid == 0:
                 continue
-            flat_logits = group_logits[valid]  # [N_valid, n_classes]
-            flat_labels = group_labels[valid].long()  # [N_valid]
+            flat_logits = group_logits[valid]
+            flat_labels = group_labels[valid].long()
+
+            # Compute inverse-frequency class weights
+            ce_weight = None
+            if class_balance:
+                counts = torch.bincount(flat_labels, minlength=n_classes).float().clamp(min=1)
+                ce_weight = (counts.sum() / (n_classes * counts)).to(flat_logits.device)
+
             if kind == "binary" and focal_gamma > 0:
                 loss = _focal_cross_entropy(flat_logits, flat_labels, focal_gamma)
             else:
-                loss = torch.nn.functional.cross_entropy(flat_logits, flat_labels)
+                loss = torch.nn.functional.cross_entropy(flat_logits, flat_labels, weight=ce_weight)
 
         total_loss = total_loss + weight * loss
 
