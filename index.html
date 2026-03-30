@@ -294,13 +294,18 @@ function evalBadge(head) {
 }
 
 // ── Data loading ─────────────────────────────────────────────────────
+// global.json (~300KB): distributions, heads, display, eval. Always needed.
+// umap.json (~2.3MB): only loaded when the landing page is shown.
 const globalReady = fetch('global.json').then(r => r.json()).then(g => {
-  umapData = g.umap;
   distributions = g.distributions;
   globalData = { heads: g.heads, display: g.display, eval: g.eval };
-  if (document.getElementById('umap-container')) renderUmap();
   if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
 });
+let umapReady = null;
+function ensureUmap() {
+  umapReady ??= fetch('umap.json').then(r => r.ok ? r.json() : null).then(u => { umapData = u; });
+  return umapReady;
+}
 
 function ensureSearchIndex() {
   searchIndexPromise ??= fetch('search.json').then(r => r.json()).then(idx => { searchIndex = idx; });
@@ -357,39 +362,47 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
 });
 
-// ── Bar rows ─────────────────────────────────────────────────────────
-// Disruption: {key, delta, gt}  — centered diverging bar
-// Effect:     {key, val, gt}    — left-anchored bar
+// ── Unified bar rendering ────────────────────────────────────────────
+// One function for all score bars: effect, disruption, predictors, attribution.
 
-function profileRow(key, {bar, value, color, chartVal, gt}) {
-  const name = displayName(key), badge = evalBadge(key);
-  return `<div class="profile-row" onclick="toggleBarDetail('${key}','${name}',${chartVal},this,${gt ?? 'null'})">
-    <div class="profile-label">${name}${badge}</div>
-    <div class="profile-bar-container">${bar}</div>
-    <div class="profile-value" style="color:${color}">${value}</div>
+function scoreBar({value, head, gt, diverging}) {
+  const color = headColor(head, value, diverging);
+  let html = '';
+  if (diverging) {
+    const w = Math.min(50, Math.abs(value) * 150);
+    html += `<div style="position:absolute;top:0;left:50%;height:100%;width:${w}%;background:${color};border-radius:3px;${value < 0 ? 'transform:translateX(-100%)' : ''}"></div>`;
+    html += `<div style="position:absolute;top:0;left:50%;width:1px;height:100%;background:var(--border)"></div>`;
+  } else {
+    html += `<div class="profile-bar" style="width:${Math.max(2, value * 100)}%;background:${color}"></div>`;
+  }
+  if (gt != null) html += `<div class="profile-db-marker" style="left:${Math.max(0, Math.min(100, gt * 100))}%"></div>`;
+  return html;
+}
+
+function scoreRow({key, value, gt, diverging, label, badge}) {
+  const name = label || displayName(key);
+  const eb = badge || evalBadge(key);
+  const color = diverging ? headColor(key, value, true) : 'var(--text-secondary)';
+  const formatted = diverging ? `${value > 0 ? '+' : ''}${value.toFixed(3)}` : value.toFixed(3);
+  return `<div class="profile-row" onclick="toggleBarDetail('${key}','${name}',${value},this,${gt ?? 'null'})">
+    <div class="profile-label">${name}${eb}</div>
+    <div class="profile-bar-container">${scoreBar({value, head: key, gt, diverging})}</div>
+    <div class="profile-value" style="color:${color}">${formatted}</div>
   </div>`;
 }
 
-function disruptionRow(it) {
-  const d = it.delta, color = headColor(it.key, d, true);
-  const barW = Math.min(50, Math.abs(d) * 150);
-  return profileRow(it.key, {
-    bar: `<div style="position:absolute;top:0;left:50%;height:100%;width:${barW}%;background:${color};border-radius:3px;${d < 0 ? 'transform:translateX(-100%)' : ''}"></div>
-          <div style="position:absolute;top:0;left:50%;width:1px;height:100%;background:var(--border)"></div>`,
-    value: `${d > 0 ? '+' : ''}${d.toFixed(3)}`,
-    color, chartVal: d, gt: it.gt,
-  });
+function colorLegend() {
+  return `Color = likelihood ratio:
+    <span style="color:#c55">\u25A0</span> pathogenic
+    <span style="color:#DB8A48">\u25A0</span> leaning path.
+    <span style="color:#bbb">\u25A0</span> neutral
+    <span style="color:#6ac">\u25A0</span> leaning benign
+    <span style="color:#27a">\u25A0</span> benign`;
 }
 
-function effectRow(it) {
-  const color = headColor(it.key, it.val, false);
-  const gtM = it.gt != null ? `<div class="profile-db-marker" style="left:${Math.max(0,Math.min(100,it.gt*100))}%"></div>` : '';
-  return profileRow(it.key, {
-    bar: `<div class="profile-bar" style="width:${Math.max(2,it.val*100)}%;background:${color}"></div>${gtM}`,
-    value: it.val.toFixed(3),
-    color: 'var(--text-secondary)', chartVal: it.val, gt: it.gt,
-  });
-}
+// Convenience wrappers for the two main head types
+function disruptionRow(it) { return scoreRow({key: it.key, value: it.delta, diverging: true}); }
+function effectRow(it) { return scoreRow({key: it.key, value: it.val, gt: it.gt}); }
 
 // ── Collapsible group (items sorted by JS from flat variant values) ───
 function renderGroup(groupName, items, renderItem, prefix) {
@@ -499,7 +512,7 @@ function showLanding() {
         ${umapMode === 'predicted' ? scoreLeg : labelLeg}
       </div>
     </div>`;
-    if (umapData) renderUmap();
+    ensureUmap().then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
   });
 }
 
@@ -697,42 +710,27 @@ function renderVariant(v) {
   const gt = v.gt || {};
   const effLookup = v.effect || {};
 
-  // --- Score Attribution (above predictors) ---
-  const attr = v.attribution;
-  const attrHeads = (attr?.heads || [...(attr?.effect || []), ...(attr?.disruption || [])]).sort((a, b) => (b.coefficient || Math.abs(b.contribution || 0)) - (a.coefficient || Math.abs(a.contribution || 0)));
+  // --- Disruption Attribution (z-scored deltas) ---
+  const attrHeads = Array.isArray(v.attribution) ? v.attribution : [];
   if (attrHeads.length) {
-    const maxC = attrHeads.reduce((m, h) => Math.max(m, h.coefficient || Math.abs(h.contribution || 0)), 0.01);
-
-    html += `<div class="card"><div class="section-title">Score Attribution</div>
-      <div class="profile-legend">Biological features explaining the pathogenicity prediction</div>`;
-
+    const maxZ = attrHeads.reduce((m, h) => Math.max(m, Math.abs(h.z || 0)), 1);
+    html += `<div class="card"><div class="section-title">Disruption Attribution</div>
+      <div class="profile-legend">Most disrupted features, ranked by z-score (population-calibrated magnitude)</div>`;
     for (const item of attrHeads) {
-      const name = globalData?.display?.[item.name] || item.name.replace(/_/g, ' ');
-      const c = item.coefficient ?? item.contribution ?? 0;
-      const barW = c / maxC * 100;
-      const pct = (c * 100).toFixed(0);
-      const d = v.disruption?.[item.name] ?? null;
-      let deltaText = '';
-      if (d !== null) {
-        const dc = headColor(item.name, d, true);
-        deltaText = `<span style="background:#f0ebe4;padding:1px 5px;border-radius:3px;color:${dc}">${d > 0 ? '+' : ''}${d.toFixed(2)}</span>`;
-      }
-      const chartVal = d ?? (v.effect?.[item.name] ?? c);
-      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${chartVal},this,null)">
+      const z = item.z || 0;
+      const barW = z / maxZ * 100;
+      const name = displayName(item.name);
+      const delta = v.disruption?.[item.name];
+      const deltaStr = delta != null ? `<span style="color:${headColor(item.name, delta, true)}">${delta > 0 ? '+' : ''}${delta.toFixed(2)}</span>` : '';
+      html += `<div class="profile-row" onclick="toggleBarDetail('${item.name}','${name}',${delta ?? z},this,null)">
         <div class="profile-label">${name}</div>
-        <div style="width:65px;flex-shrink:0;text-align:right;font-size:9px;font-weight:600;font-family:monospace;margin-right:6px">${deltaText}</div>
         <div class="profile-bar-container">
-          <div style="width:${barW}%;height:100%;background:var(--accent);border-radius:3px;opacity:0.65"></div>
+          <div class="profile-bar" style="width:${Math.max(2, barW)}%;background:var(--accent);opacity:0.5"></div>
         </div>
-        <div style="width:40px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:var(--text-secondary);flex-shrink:0">${pct}%</div>
+        <div class="profile-value" style="font-weight:600">${z.toFixed(1)}\u03C3</div>
+        <div class="profile-value">${deltaStr}</div>
       </div>`;
     }
-    const shownPct = attrHeads.reduce((s, h) => s + (h.coefficient ?? 0), 0) * 100;
-    const otherPct = 100 - shownPct;
-    const summary = shownPct > 100
-      ? `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads counteract <b>${Math.abs(otherPct).toFixed(0)}%</b>`
-      : `Top ${attrHeads.length} features contribute <b style="color:var(--accent)">${shownPct.toFixed(0)}%</b> · other heads contribute <b>${otherPct.toFixed(0)}%</b>`;
-    html += `<div style="font-size:12px;color:var(--text-secondary);padding:8px 0 0;border-top:1px solid var(--border)">${summary}</div>`;
     html += `</div>`;
   }
 
@@ -750,25 +748,32 @@ function renderVariant(v) {
   const predRows = predictors.map(p => {
     const dbVal = gt[p.key];
     const probeVal = effLookup[p.key];
-    const val = dbVal ?? probeVal;
-    if (val == null) return null;
-    const damaging = p.invert ? val < p.threshold : val > p.threshold;
-    return {name: p.name, key: p.key, value: val, source: dbVal != null ? 'database' : 'probe', call: damaging ? 'D' : 'T', color: damaging ? 'var(--negative)' : 'var(--positive)'};
+    if (dbVal == null && probeVal == null) return null;
+    const primary = dbVal ?? probeVal;
+    const damaging = p.invert ? primary < p.threshold : primary > p.threshold;
+    return {name: p.name, key: p.key, db: dbVal, probe: probeVal, primary, damaging};
   }).filter(Boolean);
 
-  const hasProbe = predRows.some(r => r.source === 'probe');
   if (predRows.length > 1) {
-    const nDam = predRows.filter(r => r.call === 'D').length;
+    const nDam = predRows.filter(r => r.damaging).length;
     const consensus = nDam > predRows.length / 2 ? 'deleterious' : 'benign';
     html += `<div class="card">
       <div class="section-title">Computational Predictors</div>
-      <div class="profile-legend">${hasProbe ? 'Database values where available, Evo2 predictions otherwise' : 'Database values from external tools'}</div>
-      ${predRows.map(r => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
-        <span style="width:120px;color:var(--text-secondary)">${r.name}</span>
-        <span style="flex:1;height:10px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(2, r.value * 100)}%;background:${headColor(r.key, r.value, false)};border-radius:3px"></span></span>
-        <span style="width:40px;text-align:right;font-family:monospace;font-size:11px">${r.value.toFixed(2)}</span>
-        <span style="width:16px;text-align:center;font-weight:700;font-size:11px;color:${r.color}">${r.call}</span>
-      </div>`).join('')}
+      <div class="profile-legend">${colorLegend()}</div>
+      ${predRows.map(r => {
+        const val = r.primary;
+        const color = headColor(r.key, val, false);
+        const dbStr = r.db != null ? r.db.toFixed(2) : '';
+        const probeStr = r.probe != null ? r.probe.toFixed(2) : '';
+        return `<div class="profile-row">
+          <div class="profile-label">${r.name}</div>
+          <div class="profile-bar-container">
+            <div class="profile-bar" style="width:${Math.max(2, val * 100)}%;background:${color}"></div>
+          </div>
+          <div class="profile-value">${dbStr}</div>
+          <div class="profile-value" style="color:var(--accent)">${probeStr}</div>
+        </div>`;
+      }).join('')}
       <div style="font-size:11px;color:var(--text-muted);margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
         Consensus: <b>${nDam}/${predRows.length}</b> ${consensus} ${nDam > predRows.length / 2 ? '(supports PP3)' : '(supports BP4)'}
       </div>
@@ -800,10 +805,7 @@ function renderVariant(v) {
     let rawHtml = '';
     rawHtml += `<div class="section-title" style="margin-top:8px">Disruption Profile</div>
       <div class="profile-legend">
-        How the mutation changes each feature (variant \u2212 reference).
-        <span style="color:#c55">\u25C0 disrupted</span>
-        <span style="color:#bbb">\u2502 zero</span>
-        <span style="color:#27a">gained \u25B6</span>
+        Change per feature (variant \u2212 reference). \u25C0 disrupted \u2502 gained \u25B6 &nbsp; ${colorLegend()}
       </div>`;
     for (const [gname, keys] of Object.entries(globalData?.heads?.disruption || {})) {
       const items = keys
@@ -813,7 +815,7 @@ function renderVariant(v) {
       if (items.length) rawHtml += renderGroup(gname, items, disruptionRow, 'ref');
     }
     rawHtml += `<div class="section-title" style="margin-top:16px">Variant Effects</div>
-      <div class="profile-legend">How this mutation changes biological and clinical features</div>`;
+      <div class="profile-legend">Variant-level effect predictions (from diff view). ${colorLegend()}</div>`;
     for (const [gname, keys] of Object.entries(globalData?.heads?.effect || {})) {
       const items = keys
         .filter(k => v.effect?.[k] != null)

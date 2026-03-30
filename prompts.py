@@ -32,17 +32,28 @@ REVEL, SpliceAI, etc.) would score for this variant. These are NOT external look
 they are Evo2's internal predictions of what those tools would say, based purely on DNA \
 sequence context.
 
-An **attribution model** (ridge regression on all probe heads) identifies which heads \
-drive the overall pathogenicity prediction. You will see the top contributing heads \
-ranked by their contribution to the logit score. Positive contributions push toward \
-pathogenic; negative push toward benign.
+A **disruption attribution** (z-scored deltas vs the population of 184K ClinVar variants) \
+identifies which features this variant disrupts most unusually. A z-score of -5σ on \
+"helix structure" means this variant's helix disruption is 5 standard deviations beyond \
+the population mean — highly informative. Near-zero z-scores are noise.
 
 Provide a clinical interpretation:
 - Lead with the disruption story: which features were disrupted (large Δ) and which were preserved
 - Use the attribution to explain WHY the model predicts what it does
 - Note any disagreements between pathogenicity and predicted clinical scores
 - Nearest neighbor consensus is strong independent evidence
-- 3-5 sentences for summary, 1 sentence for mechanism"""
+- When z-scores are high but deltas are small (<0.02), say so plainly: "statistically unusual but small in magnitude"
+- Be skeptical of high z-scores on chromatin/epigenomic features for coding variants: these often reflect indirect correlations, not causal mechanisms
+- 3-5 sentences for summary, 1 sentence for mechanism
+
+Writing style:
+- Write like a senior geneticist, not an AI. Be direct and concise.
+- Never use em dashes. Use commas, periods, or parentheses instead.
+- Never use "notably", "critically", "importantly", "striking", "painting a picture", "rewires"
+- Never use "fully concordant", "fully consistent". Just say "consistent" or "matches".
+- Don't use superlatives or hedging language. State facts plainly.
+- Don't repeat the variant ID or coordinates in the summary (the user can see them).
+- Specific numbers are good. Vague qualifiers ("profound", "massive", "broad") are not."""
 
 
 def build_prompt(v: dict) -> str:
@@ -82,36 +93,26 @@ def build_prompt(v: dict) -> str:
         lines.append(cal)
     lines.append("")
 
-    # Attribution heads (v1 schema: {"effect": [...], "disruption": [...]})
-    attr = v.get("attribution") or {}
+    # Disruption attribution (z-scored deltas)
+    attr_heads = v.get("attribution") if isinstance(v.get("attribution"), list) else []
     disruption = v.get("disruption", {})
-    effect = v.get("effect", {})
     gt = v.get("gt", {})
 
-    attr_heads = [
-        *[{**h, "kind": "effect"} for h in attr.get("effect", [])],
-        *[{**h, "kind": "disruption"} for h in attr.get("disruption", [])],
-    ]
-
-    top = sorted(attr_heads, key=lambda h: abs(h.get("contribution", 0)), reverse=True)[:15]
-    if top:
-        lines.append("### Attribution (features driving the prediction, ranked by importance)")
-        lines.append("| Feature | Type | Weight | Value | Ref\u2192Var (\u0394) | Database |")
-        lines.append("|---------|------|--------|-------|-------------|----------|")
-        for h in top:
+    if attr_heads:
+        lines.append("### Disruption Attribution (ranked by gated z-score)")
+        lines.append("| Feature | z-score | delta | Database | Signal quality |")
+        lines.append("|---------|---------|-------|----------|---------------|")
+        for h in attr_heads[:15]:
             name = h["name"]
-            kind = h.get("kind", "?")
-            coeff = h.get("contribution", 0)
-            val_str, delta_str = "\u2014", "\u2014"
+            z = h.get("z", 0)
+            delta = disruption.get(name)
+            delta_str = f"{delta:+.3f}" if isinstance(delta, (int, float)) else ""
             gt_val = gt.get(name)
-            gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else "\u2014"
-            if kind == "disruption" and name in disruption:
-                delta = disruption[name] if isinstance(disruption[name], (int, float)) else disruption[name][1] - disruption[name][0]
-                val_str = f"\u0394={delta:+.3f}"
-                delta_str = val_str
-            elif kind == "effect" and name in effect:
-                val_str = f"{effect[name]:.3f}"
-            lines.append(f"| {display_name(name)} | {kind} | {coeff:+.4f} | {val_str} | {delta_str} | {gt_str} |")
+            gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""
+            # Help the model assess signal quality
+            abs_delta = abs(delta) if isinstance(delta, (int, float)) else 0
+            quality = "strong" if abs_delta > 0.05 else "moderate" if abs_delta > 0.02 else "weak (small delta)"
+            lines.append(f"| {display_name(name)} | {z:.1f}\u03c3 | {delta_str} | {gt_str} | {quality} |")
         lines.append("")
 
     # Neighbors

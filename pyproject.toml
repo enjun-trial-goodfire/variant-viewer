@@ -35,6 +35,7 @@ dev = ["pytest>=9.0", "ruff>=0.15"]
 [project.optional-dependencies]
 interpret = ["anthropic"]
 serve = ["anthropic"]
+train = ["wandb>=0.23"]
 
 [tool.setuptools]
 packages = ["probe"]
@@ -45,6 +46,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "B008",   # typer.Option() in defaults is the standard typer pattern
+    "S108",   # /tmp for wandb SIGBUS avoidance is intentional
+]
 
 [tool.uv.sources]
 goodfire-core = { path = "../goodfire-core", editable = true }

@@ -16,9 +16,23 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs/extract
 
+# Validate probe artifacts before using GPU time
+prev=""
+for arg in "$@"; do
+    if [[ "$prev" == "--probe" ]]; then
+        for f in weights.pt config.json; do
+            if [ ! -f "${arg}/${f}" ]; then
+                echo "ERROR: ${arg}/${f} not found. Run training first."
+                exit 1
+            fi
+        done
+    fi
+    prev="$arg"
+done
+
 echo "=== Extract shard ${SLURM_ARRAY_TASK_ID}/${SLURM_ARRAY_TASK_COUNT:-1} on $(hostname) ==="
 
-uv run python pipeline/extract.py \
+uv run --frozen python pipeline/extract.py \
     --shard-id "${SLURM_ARRAY_TASK_ID}" \
     --n-shards "${SLURM_ARRAY_TASK_COUNT:-1}" \
     "$@"

@@ -2,8 +2,8 @@
 # Finalize partitioned embedding output + merge shard scores.
 #
 # Usage:
-#   EMBED=$(sbatch --parsable --array=0-15 scripts/embed.sh ...)
-#   sbatch --dependency=afterok:${EMBED} scripts/finalize_embed.sh /path/to/output-dir
+#   EXT=$(sbatch --parsable --array=0-7 pipeline/extract.sh --probe $P --activations $A)
+#   sbatch --dependency=afterok:${EXT} pipeline/finalize.sh /path/to/probe-output-dir
 
 #SBATCH --job-name=finalize_embed
 #SBATCH --cpus-per-task=4
@@ -26,7 +26,7 @@ echo "Node:   $(hostname)"
 echo "Start:  $(date)"
 echo ""
 
-uv run python -c "
+uv run --frozen python -c "
 import os
 from pathlib import Path
 import polars as pl

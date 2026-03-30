@@ -28,7 +28,6 @@ from loguru import logger
 from sklearn.decomposition import PCA
 from rich.progress import track
 
-from attribution import AttributionModel
 from umap import UMAP
 
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
@@ -41,7 +40,7 @@ from loaders import load_vep, load_domain_names, resolve_domains, load_metadata
 ANNOTATIONS = MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations.feather"
 LABELED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS = ARTIFACTS / "clinvar_evo2_vus"
-PROBE = "probe_v9"
+PROBE = "probe_v9"  # default, overridden by main(probe=...)
 K_NEIGHBORS = 10
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
 VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations"
@@ -54,25 +53,6 @@ VEP_COLS = (
 )
 
 
-def _parse_attribution(json_str: str | None) -> dict:
-    """Parse attribution JSON, normalizing v2 schema to v1.
-
-    v1 (current): {"effect": [{name, score, contribution}, ...], "disruption": [...]}
-    v2 (legacy):  {"heads": [{name, kind, coefficient}, ...]}
-
-    Always returns v1 format.
-    """
-    if not json_str:
-        return {}
-    attr = orjson.loads(json_str)
-    if "heads" not in attr:
-        return attr
-    # Normalize v2 -> v1
-    effect, disruption = [], []
-    for h in attr["heads"]:
-        entry = {"name": h["name"], "score": h.get("score", 0), "contribution": h.get("coefficient", 0)}
-        (effect if h.get("kind") == "effect" else disruption).append(entry)
-    return {"effect": effect, "disruption": disruption}
 
 
 def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
@@ -121,21 +101,26 @@ def load_data() -> tuple[pl.DataFrame, dict]:
         (df, cfg) where df has all scores rounded/filled and cfg is the probe config dict.
     """
     scores_l = pl.read_ipc(str(LABELED / PROBE / "scores.feather"))
-    scores_v = pl.read_ipc(str(VUS / PROBE / "scores.feather"))
     meta_l = load_metadata("deconfounded-full").select(
         "variant_id", "label", "consequence", "gene_name",
         "clinical_significance", "stars", "disease_name",
         "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
-    meta_v = load_metadata("vus").select(
-        "variant_id", "consequence", "gene_name",
-        "clinical_significance", "disease_name",
-        "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
 
-    df = pl.concat([
-        scores_l.join(meta_l, on="variant_id", how="left").with_columns(pl.col("stars").cast(pl.Int32)),
-        scores_v.join(meta_v, on="variant_id", how="left").with_columns(
-            pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars")),
-    ], how="diagonal")
+    parts = [scores_l.join(meta_l, on="variant_id", how="left").with_columns(pl.col("stars").cast(pl.Int32))]
+
+    vus_path = VUS / PROBE / "scores.feather"
+    if vus_path.exists():
+        scores_v = pl.read_ipc(str(vus_path))
+        meta_v = load_metadata("vus").select(
+            "variant_id", "consequence", "gene_name",
+            "clinical_significance", "disease_name",
+            "chrom", "pos", "ref", "alt", "rs_id", "allele_id", "gene_id", "gene_strand")
+        parts.append(scores_v.join(meta_v, on="variant_id", how="left").with_columns(
+            pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars")))
+    else:
+        logger.warning(f"No VUS scores at {vus_path}, building labeled-only")
+
+    df = pl.concat(parts, how="diagonal")
 
     # ref/alt in the raw ClinVar source are already VCF forward-strand alleles
     # (ref matches FASTA at 0-based pos). No strand complementing needed.
@@ -362,8 +347,7 @@ def _build_variant_dict(
     gnomad_pops: dict[str, list],
     clinvar_data: dict[str, list],
     nb_map: dict[str, list],
-    attr_by_vid: dict[str, str],
-    attr_logits: dict[str, float],
+    attr_by_vid: dict[str, list],
     domain_cache: dict[str, str],
 ) -> dict:
     """Build the JSON-serializable dict for a single variant at row index i."""
@@ -426,8 +410,7 @@ def _build_variant_dict(
         "disruption": disruption,
         "effect": effect,
         "gt": gt,
-        "attribution": _parse_attribution(attr_by_vid.get(vid)),
-        "attr_logit": attr_logits.get(vid),
+        "attribution": attr_by_vid.get(vid, []),
         "neighbors": nbs,
         "nP": n_p, "nB": n_b, "nV": len(nbs) - n_p - n_b,
     }
@@ -437,8 +420,7 @@ def write_variants(
     df: pl.DataFrame,
     cfg: dict,
     nb_map: dict[str, list],
-    attr_by_vid: dict[str, str],
-    attr_logits: dict[str, float],
+    attr_by_vid: dict[str, list],
     domain_cache: dict[str, str],
     staging: Path,
 ) -> int:
@@ -487,7 +469,7 @@ def write_variants(
             i, col_data, disruption_heads, effect_heads,
             ref_d, var_d, eff_d, gt_d,
             vep_data, gnomad_pops, clinvar_data,
-            nb_map, attr_by_vid, attr_logits, domain_cache,
+            nb_map, attr_by_vid, domain_cache,
         )
         vid = col_data["variant_id"][i]
         (staging_vdir / f"{sanitize_vid(vid)}.json").write_bytes(orjson.dumps(data))
@@ -545,8 +527,9 @@ def write_global(
                     break
 
     decomp_path = LABELED / PROBE / "score_decomposition.json"
+    if umap_data:
+        (staging / "umap.json").write_bytes(orjson.dumps(umap_data))
     (staging / "global.json").write_bytes(orjson.dumps({
-        "umap": umap_data,
         "distributions": {
             "pathogenic": {
                 "benign": prebin(scores_t[ben_mask], 80),
@@ -597,6 +580,7 @@ def main(
     sync: bool = False,
     umap: bool = False,
     neighbors: bool = False,
+    probe: str = PROBE,
 ) -> Path:
     """Build the variant viewer static site.
 
@@ -609,6 +593,9 @@ def main(
     Returns:
         Path to the staging directory (or output if synced).
     """
+    global PROBE
+    PROBE = probe
+
     t0 = time.time()
 
     def _t(msg: str) -> None:
@@ -618,7 +605,6 @@ def main(
     missing = []
     for path, desc in [
         (LABELED / PROBE / "scores.feather", f"Labeled scores ({PROBE})"),
-        (VUS / PROBE / "scores.feather", f"VUS scores ({PROBE})"),
         (ANNOTATIONS, "Annotations"),
         (MAYO_DATA / "clinvar" / "deconfounded-full" / "metadata.feather", "Labeled metadata"),
         (MAYO_DATA / "gencode" / "genes.feather", "GENCODE genes"),
@@ -654,24 +640,18 @@ def main(
     else:
         _t("Skipping embeddings (use --neighbors or --umap to enable)")
 
-    # ── Attribution ──────────────────────────────────────────────────────
-    attribution_path = LABELED / PROBE / "attribution.json"
-    if attribution_path.exists():
-        attr_model = AttributionModel.load(attribution_path)
-        attr_df = attr_model.attribute(df, k_effect=10, k_disruption=10)
-        attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
-        attr_logits = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_logit"].tolist(), strict=True))
-        _t(f"Attribution loaded for {len(attr_by_vid):,} variants")
-    else:
-        attr_by_vid = {}
-        attr_logits = {}
-        logger.warning(f"No attribution model at {attribution_path}, skipping")
+    # ── Attribution (z-scored disruption deltas) ───────────────────────
+    from attribution import attribute
+
+    disruption_heads = tuple(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
+    attr_by_vid = attribute(df, disruption_heads)
+    _t(f"Attribution: {len(attr_by_vid):,} variants")
 
     # ── Write to staging ─────────────────────────────────────────────────
     staging = Path(tempfile.mkdtemp(prefix="variant_viewer_"))
 
     _t("Writing variant JSONs...")
-    n = write_variants(df, cfg, nb_map, attr_by_vid, attr_logits, domain_cache, staging)
+    n = write_variants(df, cfg, nb_map, attr_by_vid, domain_cache, staging)
     _t(f"Wrote {n:,} variants to staging")
 
     _t("global.json + search.json...")
@@ -687,6 +667,7 @@ def main(
         return output
     else:
         _t(f"Done. {n:,} variants in {staging}")
+        print(f"STAGING_DIR={staging}")
         return staging
 
 

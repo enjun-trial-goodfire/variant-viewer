@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +116,69 @@ class TokenLabelLookup:
                 labels[i, j] = float(chrom_cols[j][row])
 
         return labels
+
+
+class RefChunkLoader:
+    """Stream SAE activations with position-resolved reference labels.
+
+    Wraps goodfire-core's ActivationDataset/training_iterator to yield
+    (acts, labels, valid) tuples where labels come from TokenLabelLookup.
+
+    Args:
+        sae_dir: Path to SAE activation dataset (goodfire-core chunked format).
+        head_names: Ordered tuple of annotation column names to resolve.
+        batch_size: Batch size per GPU rank.
+        device: Target device string (e.g. "cuda:0").
+    """
+
+    def __init__(
+        self,
+        sae_dir: Path,
+        head_names: tuple[str, ...],
+        batch_size: int,
+        device: str,
+    ):
+        from goodfire_core.storage import ActivationDataset, FilesystemStorage
+
+        self.device = device
+        self.lookup = TokenLabelLookup(head_names=head_names)
+
+        storage = FilesystemStorage(sae_dir.parent)
+        self.dataset = ActivationDataset(
+            storage,
+            sae_dir.name,
+            batch_size=batch_size,
+            include_provenance=True,
+        )
+
+    def iter_epoch(self):
+        """Yield (acts, labels, valid) for one epoch over SAE activations.
+
+        acts:   [B, d_model] float on device
+        labels: [B, n_heads] float32 on device
+        valid:  [B] bool on device — True where at least one label was resolved
+        """
+        for batch in self.dataset.training_iterator(
+            device=self.device, n_epochs=1, shuffle=True,
+        ):
+            n = batch.acts.shape[0]
+
+            # Build provenance dict for label_chunk
+            positions = (
+                batch.token_positions.tolist()
+                if batch.token_positions is not None
+                else [0] * n
+            )
+            provenance = {
+                "sequence_ids": batch.sequence_ids,
+                "positions": positions,
+            }
+
+            # Resolve labels: [n, n_heads] float32 numpy (NaN = missing)
+            labels_np = self.lookup.label_chunk(provenance, n)
+            labels = torch.from_numpy(labels_np).to(self.device, non_blocking=True)
+
+            # Valid = at least one non-NaN label per token
+            valid = ~torch.isnan(labels).all(dim=1)
+
+            yield batch.acts, labels, valid

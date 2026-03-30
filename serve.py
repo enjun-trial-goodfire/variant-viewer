@@ -7,7 +7,6 @@ Usage:
     ANTHROPIC_API_KEY=... uv run --extra serve python serve.py [--build-dir webapp/build] [--port 8080]
 """
 
-import argparse
 import asyncio
 import json
 import os
@@ -15,15 +14,23 @@ import time
 from pathlib import Path
 
 import orjson
+import typer
 from loguru import logger
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-
 from paths import sanitize_vid
 from prompts import SYSTEM_PROMPT, build_prompt
+
+# Load .env if present (for ANTHROPIC_API_KEY)
+_env = Path(__file__).parent / ".env"
+if _env.exists():
+    for line in _env.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 
 # ── Server state ──────────────────────────────────────────────────────────
 
@@ -126,26 +133,24 @@ def create_app(build_dir: Path) -> Starlette:
     return app
 
 
-def main():
+def main(
+    build_dir: Path = typer.Option(Path("webapp/build"), help="Build directory to serve"),
+    port: int = typer.Option(8080, help="Server port"),
+    host: str = typer.Option("0.0.0.0", help="Server host"),
+) -> None:
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Variant viewer server with on-demand interpretation")
-    parser.add_argument("--build-dir", type=Path, default=Path("webapp/build"))
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--host", default="0.0.0.0")
-    args = parser.parse_args()
+    if not build_dir.exists():
+        logger.error(f"Build directory not found: {build_dir}")
+        raise typer.Exit(1)
 
-    if not args.build_dir.exists():
-        logger.error(f"Build directory not found: {args.build_dir}")
-        return
-
-    app = create_app(args.build_dir)
-    logger.info(f"Serving {args.build_dir} on http://{args.host}:{args.port}")
+    server = create_app(build_dir)
+    logger.info(f"Serving {build_dir} on http://{host}:{port}")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.warning("ANTHROPIC_API_KEY not set — interpretation endpoint will return 503")
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(server, host=host, port=port)
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

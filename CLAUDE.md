@@ -1,33 +1,27 @@
 # variant-viewer
 
-Interactive variant effect viewer for Evo2 ClinVar probes. Extracted from
-[gfm_gen](https://github.com/goodfire-ai/gfm_gen).
+Full pipeline for Evo2 ClinVar variant effect prediction: train, extract, eval, build, serve.
 
-## Build & serve
+## CLI
 
 ```bash
-uv sync
-bash preflight.sh               # validate data is present
-uv run python build.py          # builds to /tmp with --no-sync, or webapp/build/
-python -m http.server -d webapp/build/ 8080
+uv run vv train pretrain-cmd --gpus 4        # probe training (SLURM + torchrun)
+uv run vv extract --probe $P --activations $A  # extract scores (8 GPU shards)
+uv run vv eval $ACTS/probe_v10               # per-head eval → eval.json
+uv run vv log-eval $ACTS/probe_v10           # upload to wandb
+uv run vv build --probe probe_v10            # build static site
+uv run vv serve /tmp/variant_viewer_*        # serve with AI interpretation
+uv run vv pipeline $ACTS/probe_v10           # full chain
 ```
-
-For SLURM: `sbatch pipeline/serve.sh` (builds + serves + tunnels).
 
 ## Pipeline
 
 ```
-[gfm_gen]     harvest → train
-                  ↓
-[this repo]   extract → finalize → eval → build → serve
-              pipeline/  pipeline/         build.py  serve.py
+train → extract → finalize → eval → log-eval → build → serve
 ```
 
-- `pipeline/extract.py` — 3-view scoring: diff/ref/var activations → embeddings + scores
-- `pipeline/finalize.sh` — merge shard scores, index embeddings
-- `pipeline/pipeline.sh` — end-to-end chain with SLURM dependencies
-- `build.py` — static site generator: scores + metadata → JSON files
-- `serve.py` — development server with live Claude interpretation
+All steps are standalone scripts chainable via SLURM `--dependency=afterok`.
+`pipeline/pipeline.sh` chains them automatically.
 
 ## Probe heads
 
@@ -35,62 +29,55 @@ Two types, defined in `config.json`:
 - **disruption_heads** (~500): scored on ref and var views separately (delta = disruption)
 - **effect_heads** (~200): scored on diff view (variant-level predictions)
 
-Older probes use `ref_heads`/`diff_heads` — build.py handles both.
+Older probes use `ref_heads`/`diff_heads` — code handles both.
 
-## File layout
+## Key files
 
 ```
-build.py                 Static site generator
-display.py               Head display names + category grouping
-attribution.py           Ridge attribution model (per-variant feature importance)
-serve.py                 Development server (static files + Claude API)
-clinvar_submissions.py   ClinVar XML → submissions.feather (run once)
-preflight.sh             Validate all inputs before building
-index.html               Single-page frontend (vanilla JS)
-SCHEMA.md                JSON data contract (global.json, variants/*.json, search.json)
-
-probe/
-  covariance.py          MultiHeadCovProbeV2 (architecture + checkpoint loading)
-  binning.py             Soft-binning for continuous heads
-
-pipeline/
-  extract.py             3-view scoring (SLURM array, GPU)
-  extract.sh             SLURM wrapper for extract.py
-  finalize.sh            Merge shards + index embeddings
-  interpret.py           Claude API variant interpretation
-  pipeline.sh            End-to-end chain (extract → finalize → eval → build)
-  serve.sh               SLURM: build + serve + tunnel
+cli.py                   Typer CLI: uv run vv <cmd>
+build.py                 Static site generator (--probe flag selects version)
+serve.py                 Dev server + Claude interpretation (loads .env for API key)
+index.html               Single-page frontend (vanilla JS, no build step)
+attribution.py           Z-score attribution with sigmoid-gated delta filtering
+training.py              Gene split, head discovery, head classification
+prompts.py               Claude interpretation prompt builder
+probe/covariance.py      MultiHeadCovProbeV2 + focal multihead loss
+pipeline/train.py        Probe training (pretrain + finetune phases, DDP)
+pipeline/train.sh        SLURM wrapper (MASTER_PORT, WANDB_DIR, --frozen)
+pipeline/extract.py      3-view scoring with artifact validation
+pipeline/eval.py         Per-head metrics: AUC, correlation, accuracy
+pipeline/pipeline.sh     End-to-end SLURM chain
+pipeline/interpret.py    Batch Claude interpretation (cost-guarded >20 variants)
+pipeline/ref_labels.py   Token label lookup for SAE pretraining
 ```
 
 ## Data
 
-**Local** (`data/`, not in git — symlink to gfm_gen/data on cluster):
-- `data/clinvar/deconfounded-full/metadata.feather` — labeled metadata
-- `data/clinvar/deconfounded-full/annotations.feather` — ground truth
-- `data/clinvar/vus/metadata.feather` — VUS metadata
-- `data/gencode/genes.feather` — gene coordinates
+**Local** (`data/` → `~/projects/data/`, symlinked, not in git):
+- `clinvar/deconfounded-full/{metadata,annotations}.feather`
+- `clinvar/vus/metadata.feather`
+- `clinvar/submissions.feather`
+- `gencode/genes.feather`
 
-**Shared artifacts** (hardcoded in build.py to `/mnt/polished-lake/artifacts/...`):
+**Shared artifacts** (`paths.py:ARTIFACTS`):
 - `clinvar_evo2_deconfounded_full/{probe}/scores.feather`
 - `clinvar_evo2_deconfounded_full/{probe}/embeddings/`
-- `clinvar_evo2_vus/{probe}/scores.feather`
-- `clinvar_evo2_labeled/variant_annotations/variant_annotations_chr*.parquet`
-
-Run `bash preflight.sh probe_v9` to check everything exists.
+- `clinvar_evo2_vus/{probe}/scores.feather` (optional, build works without)
 
 ## Code conventions
 
-- **polars** not pandas (`pl.read_ipc`, `.filter()`, `.join()`)
-- **torch** not numpy (convert at API boundaries only)
-- **uv** not pip
-- **orjson** for JSON serialization (speed matters: 232K variant files)
-- See `SCHEMA.md` for the JSON data contract
-- Hardcoded paths are in build.py constants — update when artifacts move
-- Current probe: `probe_v9` (`d_hidden=32, d_probe=128, focal_gamma=3.0`)
+- **polars** not pandas, **torch** not numpy, **uv** not pip
+- **orjson** for JSON (speed matters: 232K variant files)
+- **typer** for all CLIs, **wandb** for experiment tracking
+- Probe version is a CLI flag (`--probe probe_v10`), not hardcoded
+- `.env` file for ANTHROPIC_API_KEY (gitignored)
+- SLURM scripts: `set -euo pipefail`, `cd ${SLURM_SUBMIT_DIR}`, `uv run --frozen`
+- Current probe: `probe_v10` (`d_hidden=64, d_probe=128, focal_gamma=3.0`)
 
-## Known limitations
+## wandb
 
-- All artifact paths are hardcoded (not yet configurable via CLI/env)
-- `data/` must be symlinked or populated manually
-- `goodfire-core` is an editable dependency via `../goodfire-core`
-- Pipeline scripts assume SLURM cluster with GPUs
+Project: `gfm-probes`. Each probe version has eval metrics:
+```bash
+uv run vv log-eval $ACTS/probe_v10   # per-head table + summary scalars
+```
+Training logs: `loss`, `loss_diff`, `loss_ref`, `grad_norm` per step.

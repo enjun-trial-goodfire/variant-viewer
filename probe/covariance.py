@@ -208,15 +208,24 @@ def _soft_cross_entropy(
     return -(soft_targets * log_probs).sum(dim=-1).mean()
 
 
+def _focal_cross_entropy(logits: Tensor, labels: Tensor, gamma: float) -> Tensor:
+    """Focal loss: -(1-p_t)^gamma log(p_t). Reduces to CE when gamma=0."""
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    targets = torch.nn.functional.one_hot(labels, logits.size(-1)).float()
+    p_t = (log_probs.exp() * targets).sum(dim=-1)
+    return -((1 - p_t) ** gamma * (targets * log_probs).sum(dim=-1)).mean()
+
+
 def multihead_loss_v2(
     logits: Tensor,
     labels: Tensor,
     head_specs: tuple[HeadSpec, ...],
+    focal_gamma: float = 0.0,
 ) -> Tensor:
     """Multi-task loss with mixed categorical + continuous heads.
 
     Batches heads by (kind, n_classes, weight) to minimize kernel launches.
-    With 258 heads this is ~10x fewer launches than the per-head loop.
+    Binary heads use focal loss when ``focal_gamma > 0`` (recommended: 3.0).
 
     Args:
         logits: Packed logits [B, sum(head_outputs)].
@@ -224,6 +233,7 @@ def multihead_loss_v2(
             - Categorical/binary heads: integer class index, -1 = masked
             - Continuous heads: float value in [0, 1], NaN = masked
         head_specs: Tuple of HeadSpec for each head.
+        focal_gamma: Focal loss gamma for binary heads (0 = standard CE).
 
     Returns:
         Scalar weighted loss.
@@ -269,7 +279,10 @@ def multihead_loss_v2(
                 continue
             flat_logits = group_logits[valid]  # [N_valid, n_classes]
             flat_labels = group_labels[valid].long()  # [N_valid]
-            loss = torch.nn.functional.cross_entropy(flat_logits, flat_labels)
+            if kind == "binary" and focal_gamma > 0:
+                loss = _focal_cross_entropy(flat_logits, flat_labels, focal_gamma)
+            else:
+                loss = torch.nn.functional.cross_entropy(flat_logits, flat_labels)
 
         total_loss = total_loss + weight * loss
 

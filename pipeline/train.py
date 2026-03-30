@@ -22,15 +22,16 @@ Usage:
          --checkpoint $ACTS/probe_v11/pretrain.pt"
 """
 
-import argparse
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
 import torch
 import torch.distributed as dist
+import typer
 import wandb
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 from goodfire_core.training.optimizers import EMuon
@@ -39,7 +40,7 @@ from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
 from training import gene_split
-from probe.covariance import HeadSpec, MultiHeadCovProbeV2, multihead_loss
+from probe.covariance import HeadSpec, MultiHeadCovProbeV2, multihead_loss_v2 as multihead_loss
 from loaders import load_metadata
 from pipeline.extract import unified_diff, unified_ref
 from pipeline.ref_labels import RefChunkLoader
@@ -120,10 +121,10 @@ def pretrain(args, device, rank, world_size):
     # Train
     probe.train()
     step = 0
-    for acts, ref_labels, valid in tqdm(loader.iter_epoch(), disable=rank != 0, desc="pretrain"):
+    for acts, ref_labels, _valid in tqdm(loader.iter_epoch(), disable=rank != 0, desc="pretrain"):
         # Build full label vector: ref labels in position, effect heads masked
-        B = acts.shape[0]
-        labels = missing.unsqueeze(0).expand(B, -1).clone().to(device, non_blocking=True)
+        n = acts.shape[0]
+        labels = missing.unsqueeze(0).expand(n, -1).clone().to(device, non_blocking=True)
         for ri, fi in ref_to_full.items():
             labels[:, fi] = ref_labels[:, ri]
 
@@ -138,17 +139,29 @@ def pretrain(args, device, rank, world_size):
 
         optimizer.zero_grad()
         loss.backward()
+
+        # Log gradient norm before stepping
+        if rank == 0:
+            raw_p = probe.module if distributed else probe
+            grad_norm = torch.nn.utils.clip_grad_norm_(raw_p.parameters(), max_norm=float("inf"))
+            wandb.log({
+                "pretrain/loss": loss.item(),
+                "pretrain/grad_norm": grad_norm.item(),
+                "pretrain/step": step,
+                "pretrain/batch_size": n,
+            })
+
         optimizer.step()
 
         step += 1
         if rank == 0 and step % 100 == 0:
             logger.info(f"Step {step}: loss={loss.item():.4f}")
 
-    # Save
+    # Save + upload artifact
     if rank == 0:
         raw_probe = probe.module if distributed else probe
         raw_probe.save_checkpoint(str(out_dir / "pretrain.pt"))
-        (out_dir / "pretrain_config.json").write_text(json.dumps({
+        config_data = {
             "phase": "pretrain",
             "d_model": args.d_model,
             "d_hidden": args.d_hidden,
@@ -160,8 +173,15 @@ def pretrain(args, device, rank, world_size):
             "n_local": len(local_specs),
             "n_global": len(global_specs),
             "total_steps": step,
-        }, indent=2))
+        }
+        (out_dir / "pretrain_config.json").write_text(json.dumps(config_data, indent=2))
         logger.info(f"Saved: {out_dir / 'pretrain.pt'} ({step} steps)")
+
+        # Upload checkpoint + config as wandb artifact
+        artifact = wandb.Artifact(f"pretrain-{args.name}", type="model")
+        artifact.add_file(str(out_dir / "pretrain.pt"))
+        artifact.add_file(str(out_dir / "pretrain_config.json"))
+        wandb.log_artifact(artifact)
 
 
 # ── Phase 2: Variant finetuning ──────────────────────────────────────────
@@ -241,6 +261,7 @@ def finetune(args, device, rank, world_size):
             test_df.select("variant_id", "gene_name").with_columns(pl.lit("test").alias("split")),
         ]).write_ipc(out_dir / "split.feather")
 
+    global_step = 0
     for epoch in range(args.epochs):
         probe.train()
         pbar = tqdm(var_iter.iter_epoch(), total=var_iter.steps_per_epoch,
@@ -248,12 +269,12 @@ def finetune(args, device, rank, world_size):
 
         for batch in pbar:
             raw = batch.acts
-            B = raw.shape[0]
+            n = raw.shape[0]
 
             # Look up labels
             indices = torch.tensor([id_to_idx.get(sid, -1) for sid in batch.sequence_ids], dtype=torch.long)
             known = indices >= 0
-            labels = missing.unsqueeze(0).expand(B, -1).clone()
+            labels = missing.unsqueeze(0).expand(n, -1).clone()
             if known.any():
                 labels[known] = label_matrix[indices[known]]
             labels = labels.to(device, non_blocking=True)
@@ -277,16 +298,37 @@ def finetune(args, device, rank, world_size):
             loss = loss_diff + loss_ref
             optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
 
             if rank == 0:
+                raw_p = probe.module if distributed else probe
+                grad_norm = torch.nn.utils.clip_grad_norm_(raw_p.parameters(), max_norm=float("inf"))
+                wandb.log({
+                    "finetune/loss": loss.item(),
+                    "finetune/loss_diff": loss_diff.item(),
+                    "finetune/loss_ref": loss_ref.item(),
+                    "finetune/grad_norm": grad_norm.item(),
+                    "finetune/epoch": epoch,
+                    "finetune/step": global_step,
+                    "finetune/batch_size": n,
+                    "finetune/known_labels_frac": known.float().mean().item(),
+                })
                 pbar.set_postfix(loss=f"{loss.item():.3f}", diff=f"{loss_diff.item():.3f}", ref=f"{loss_ref.item():.3f}")
 
-    # Save
+            optimizer.step()
+            global_step += 1
+
+        # ── End-of-epoch checkpoint ───────────────────────────────────────
+        if rank == 0:
+            raw_probe = probe.module if distributed else probe
+            ckpt_path = out_dir / f"checkpoint_epoch_{epoch + 1}.pt"
+            raw_probe.save_checkpoint(str(ckpt_path))
+            logger.info(f"Checkpoint: {ckpt_path}")
+
+    # ── Save final + upload artifact ──────────────────────────────────────
     if rank == 0:
         raw_probe = probe.module if distributed else probe
         raw_probe.save_checkpoint(str(out_dir / "weights.pt"))
-        (out_dir / "config.json").write_text(json.dumps({
+        config_data = {
             "phase": "finetune",
             "preset": args.preset,
             "d_model": args.d_model,
@@ -301,33 +343,26 @@ def finetune(args, device, rank, world_size):
             "pretrain": str(args.checkpoint) if args.checkpoint else None,
             "n_train": train_df.height,
             "n_test": test_df.height,
-        }, indent=2))
+        }
+        (out_dir / "config.json").write_text(json.dumps(config_data, indent=2))
         logger.info(f"Saved: {out_dir / 'weights.pt'}")
 
+        # Upload everything as wandb artifact
+        artifact = wandb.Artifact(f"probe-{args.name}", type="model")
+        artifact.add_file(str(out_dir / "weights.pt"))
+        artifact.add_file(str(out_dir / "config.json"))
+        if (out_dir / "eval.json").exists():
+            artifact.add_file(str(out_dir / "eval.json"))
+        if (out_dir / "split.feather").exists():
+            artifact.add_file(str(out_dir / "split.feather"))
+        wandb.log_artifact(artifact)
 
-# ── CLI ───────────────────────────────────────────────────────────────────
+
+# ── DDP setup ─────────────────────────────────────────────────────────────
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--phase", required=True, choices=("pretrain", "finetune"))
-    parser.add_argument("--name", default="probe-v11", help="W&B run name")
-    parser.add_argument("--activations", type=Path, default=DECONFOUNDED)
-    parser.add_argument("--checkpoint", type=Path, help="Pretrain checkpoint for finetune")
-    parser.add_argument("--preset", default="deconfounded-full")
-    parser.add_argument("--d-model", type=int, default=8192)
-    parser.add_argument("--d-hidden", type=int, default=64)
-    parser.add_argument("--d-probe", type=int, default=256)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=0.01)
-    parser.add_argument("--batch-size", type=int, default=2048)
-    parser.add_argument("--focal-gamma", type=float, default=3.0)
-    parser.add_argument("--test-size", type=float, default=0.2)
-    parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
-
-    torch.manual_seed(args.seed)
-
+def _init_distributed() -> tuple[torch.device, int, int, bool]:
+    """Initialize DDP if running under torchrun, else single GPU."""
     distributed = dist.is_available() and "RANK" in os.environ
     if distributed:
         dist.init_process_group("nccl")
@@ -338,20 +373,67 @@ def main():
     else:
         rank, world_size = 0, 1
         device = torch.device("cuda")
+    return device, rank, world_size, distributed
 
+
+# ── CLI ───────────────────────────────────────────────────────────────────
+
+app = typer.Typer(help="Probe v11 training: reference pretrain + variant finetune")
+
+
+@app.command()
+def pretrain_cmd(
+    name: str = typer.Option("probe-v11-pretrain", help="W&B run name"),
+    activations: Path = typer.Option(DECONFOUNDED, help="Activations storage directory"),
+    d_model: int = typer.Option(8192),
+    d_hidden: int = typer.Option(64),
+    d_probe: int = typer.Option(256),
+    lr: float = typer.Option(0.01),
+    batch_size: int = typer.Option(2048),
+    focal_gamma: float = typer.Option(3.0),
+    seed: int = typer.Option(42),
+) -> None:
+    """Phase 1: Pretrain ref heads on single-token SAE activations."""
+    torch.manual_seed(seed)
+    device, rank, world_size, distributed = _init_distributed()
     if os.environ.get("SLURM_JOB_ID"):
         os.environ.setdefault("WANDB_DIR", f"/tmp/wandb_{os.environ['SLURM_JOB_ID']}")
+    args = SimpleNamespace(**{k: v for k, v in locals().items() if k not in ("distributed",)})
     if rank == 0:
-        wandb.init(project="gfm-probes", name=args.name, config=vars(args))
+        wandb.init(project="gfm-probes", name=name, config=vars(args))
+    pretrain(args, device, rank, world_size)
+    if distributed:
+        dist.destroy_process_group()
 
-    if args.phase == "pretrain":
-        pretrain(args, device, rank, world_size)
-    else:
-        finetune(args, device, rank, world_size)
 
+@app.command()
+def finetune_cmd(
+    name: str = typer.Option("probe-v11-finetune", help="W&B run name"),
+    activations: Path = typer.Option(DECONFOUNDED, help="Activations storage directory"),
+    checkpoint: Path = typer.Option(None, help="Pretrain checkpoint (.pt)"),
+    preset: str = typer.Option("deconfounded-full"),
+    d_model: int = typer.Option(8192),
+    d_hidden: int = typer.Option(64),
+    d_probe: int = typer.Option(256),
+    epochs: int = typer.Option(1),
+    lr: float = typer.Option(0.01),
+    batch_size: int = typer.Option(2048),
+    focal_gamma: float = typer.Option(3.0),
+    test_size: float = typer.Option(0.2),
+    seed: int = typer.Option(42),
+) -> None:
+    """Phase 2: Finetune effect + global ref heads on variant activations."""
+    torch.manual_seed(seed)
+    device, rank, world_size, distributed = _init_distributed()
+    if os.environ.get("SLURM_JOB_ID"):
+        os.environ.setdefault("WANDB_DIR", f"/tmp/wandb_{os.environ['SLURM_JOB_ID']}")
+    args = SimpleNamespace(**{k: v for k, v in locals().items() if k not in ("distributed",)})
+    if rank == 0:
+        wandb.init(project="gfm-probes", name=name, config=vars(args))
+    finetune(args, device, rank, world_size)
     if distributed:
         dist.destroy_process_group()
 
 
 if __name__ == "__main__":
-    main()
+    app()

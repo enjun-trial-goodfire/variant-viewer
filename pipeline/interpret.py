@@ -11,17 +11,18 @@ Usage:
 Requires ANTHROPIC_API_KEY environment variable.
 """
 
-import argparse
 import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Optional
 
 import polars as pl
 import torch
+import typer
 from loguru import logger
 
-from attribution import AttributionModel
+from attribution import attribute
 from constants import CONSEQUENCE_CLASSES, AA_SWAP_CLASSES
 from paths import ARTIFACTS, MAYO_DATA
 from loaders import load_metadata
@@ -81,14 +82,9 @@ def load_data():
     disruption_set = set(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
     effect_set = set(cfg.get("effect_heads", cfg.get("diff_heads", ())))
 
-    # Attribution model
-    attribution_path = LABELED_ACT / PROBE / "attribution.json"
-    attr_model = AttributionModel.load(attribution_path) if attribution_path.exists() else None
-    if attr_model:
-        attr_df = attr_model.attribute(all_v, k_effect=10, k_disruption=10)
-        attr_by_vid = dict(zip(attr_df["variant_id"].to_list(), attr_df["attribution_json"].to_list(), strict=True))
-    else:
-        attr_by_vid = {}
+    # Attribution (z-scored disruption deltas)
+    disruption_heads = tuple(cfg.get("disruption_heads", cfg.get("ref_heads", ())))
+    attr_by_vid = attribute(all_v, disruption_heads, k=10)
 
     # Embeddings
     from goodfire_core.storage import ActivationDataset, FilesystemStorage
@@ -183,9 +179,8 @@ def row_to_variant(row: dict, data: dict, neighbors: list[dict]) -> dict:
         if val is not None and isinstance(val, (int, float)) and val > 0:
             gt[key[3:]] = val
 
-    # Attribution
-    attr_json = data["attr_by_vid"].get(vid)
-    attribution = json.loads(attr_json) if attr_json else {}
+    # Attribution (already a list of {name, z} dicts from attribute())
+    attribution = data["attr_by_vid"].get(vid, [])
 
     n_p = sum(1 for nb in neighbors if "pathogenic" in nb.get("label", ""))
     n_b = sum(1 for nb in neighbors if "benign" in nb.get("label", ""))
@@ -283,40 +278,47 @@ async def batch(vids: list[str], data: dict, concurrency: int, dry_run: bool) ->
     return results
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--variant", help="Single variant ID")
-    parser.add_argument("--top-vus", type=int, help="Top N VUS by score")
-    parser.add_argument("--concurrency", type=int, default=5)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--output", type=Path, default=OUTPUT_DIR)
-    args = parser.parse_args()
+def main(
+    variant: Optional[str] = typer.Option(None, help="Single variant ID"),
+    top_vus: Optional[int] = typer.Option(None, help="Top N VUS by score"),
+    concurrency: int = typer.Option(5, help="Max concurrent API calls"),
+    dry_run: bool = typer.Option(False, help="Print prompts without calling API"),
+    output: Path = typer.Option(OUTPUT_DIR, help="Output directory for interpretations"),
+) -> None:
+    if not variant and not top_vus:
+        raise typer.BadParameter("Specify --variant or --top-vus")
 
     logger.info("Loading data...")
     data = load_data()
     logger.info(f"Loaded {data['all'].height:,} variants, {len(data['attr_by_vid']):,} attributions")
 
-    if args.variant:
-        vids = [args.variant]
-    elif args.top_vus:
-        vus = data["all"].filter(pl.col("label") == "VUS")
-        vids = vus.sort("score_pathogenic", descending=True).head(args.top_vus)["variant_id"].to_list()
+    if variant:
+        vids = [variant]
     else:
-        parser.error("Specify --variant or --top-vus")
-        return
+        vus = data["all"].filter(pl.col("label") == "VUS")
+        vids = vus.sort("score_pathogenic", descending=True).head(top_vus)["variant_id"].to_list()
 
-    results = asyncio.run(batch(vids, data, args.concurrency, args.dry_run))
+    # Cost guard: batch interpretation is expensive (~$0.01/variant, $500+ for 50K VUS)
+    if len(vids) > 20 and not dry_run:
+        cost_est = len(vids) * 0.01
+        logger.warning(f"About to interpret {len(vids):,} variants (~${cost_est:,.0f} API cost)")
+        confirm = input(f"Continue with {len(vids)} variants? [y/N] ").strip().lower()
+        if confirm != "y":
+            logger.info("Aborted.")
+            raise typer.Exit(0)
 
-    if not args.dry_run:
-        args.output.mkdir(parents=True, exist_ok=True)
+    results = asyncio.run(batch(vids, data, concurrency, dry_run))
+
+    if not dry_run:
+        output.mkdir(parents=True, exist_ok=True)
         for r in results:
             if r.get("status") != "ok":
                 continue
             safe = r["variant_id"].replace(":", "_")
-            (args.output / f"{safe}.json").write_text(json.dumps(r, indent=2))
-        (args.output / "summary.json").write_text(json.dumps(results, indent=2))
-        logger.info(f"Saved {len(results)} interpretations to {args.output}")
+            (output / f"{safe}.json").write_text(json.dumps(r, indent=2))
+        (output / "summary.json").write_text(json.dumps(results, indent=2))
+        logger.info(f"Saved {len(results)} interpretations to {output}")
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

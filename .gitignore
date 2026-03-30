@@ -8,3 +8,6 @@ uv.lock
 data/
 logs/
 builds/
+outputs/
+wandb/
+.env

@@ -45,7 +45,7 @@ check "$VUS/$PROBE/embeddings" "VUS embeddings"
 
 echo ""
 echo "VEP annotations:"
-n_vep=$(ls "$VEP"/variant_annotations_chr*.parquet 2>/dev/null | wc -l)
+n_vep=$(find "$VEP" -maxdepth 1 -name 'variant_annotations_chr*.parquet' 2>/dev/null | wc -l)
 if [ "$n_vep" -ge 22 ]; then
     echo "  OK  $n_vep chromosome parquets"
     ok=$((ok + 1))

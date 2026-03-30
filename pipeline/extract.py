@@ -23,12 +23,12 @@ Parallel (SLURM array):
     sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh $ACTS/probe_v9
 """
 
-import argparse
 import json
 from pathlib import Path
 
 import polars as pl
 import torch
+import typer
 from goodfire_core.storage import ActivationDataset, ActivationWriter, FilesystemStorage
 from loguru import logger
 from tqdm import tqdm
@@ -99,19 +99,17 @@ def _scores_from_logits(
     return result
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--probe", type=Path, required=True, help="Probe directory (weights.pt + config.json)")
-    parser.add_argument("--activations", type=Path, required=True, help="Base storage with raw activations")
-    parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--mode", choices=("continue", "overwrite"), default="continue")
-    parser.add_argument("--shard-id", type=int, default=0)
-    parser.add_argument("--n-shards", type=int, default=1)
-    args = parser.parse_args()
-
+def main(
+    probe: Path = typer.Option(..., help="Probe directory (weights.pt + config.json)"),
+    activations: Path = typer.Option(..., help="Base storage with raw activations"),
+    batch_size: int = typer.Option(512, help="Batch size for streaming"),
+    mode: str = typer.Option("continue", help="continue or overwrite"),
+    shard_id: int = typer.Option(0, help="Shard index (for parallel extraction)"),
+    n_shards: int = typer.Option(1, help="Total number of shards"),
+) -> None:
     # ── Load probe + validate config ──────────────────────────────────────
-    probe = MultiHeadCovProbeV2.from_checkpoint(str(args.probe / "weights.pt")).cuda().eval()
-    config = json.loads((args.probe / "config.json").read_text())
+    model = MultiHeadCovProbeV2.from_checkpoint(str(probe / "weights.pt")).cuda().eval()
+    config = json.loads((probe / "config.json").read_text())
 
     # Support both old naming (ref_heads/diff_heads) and new (disruption_heads/effect_heads)
     disruption_heads = frozenset(config.get("disruption_heads", config.get("ref_heads", ())))
@@ -119,13 +117,13 @@ def main() -> None:
     assert disruption_heads, "config.json missing disruption_heads (or ref_heads) — check training script"
     assert effect_heads, "config.json missing effect_heads (or diff_heads) — check training script"
 
-    d_hidden = probe.d_hidden
+    d_hidden = model.d_hidden
     logger.info(f"Probe: {len(disruption_heads)} disruption + {len(effect_heads)} effect heads, d_hidden={d_hidden}")
 
     # Build class label lookup for multi-class heads (consequence, aa_swap)
     # so scores.feather writes human-readable strings instead of integer argmax.
     class_labels: dict[str, tuple[str, ...]] = {}
-    for name, spec in probe.heads.items():
+    for name, spec in model.heads.items():
         if spec.kind == "categorical" and spec.n_classes > 2:
             labels_key = f"{name}_classes"
             if labels_key in config:
@@ -134,34 +132,34 @@ def main() -> None:
         logger.info(f"Class labels for {len(class_labels)} multi-class heads: {list(class_labels.keys())}")
 
     # ── Resolve IDs + shard ───────────────────────────────────────────────
-    storage = FilesystemStorage(args.activations)
+    storage = FilesystemStorage(activations)
     all_ids = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True).list_sequence_ids()
 
     n = len(all_ids)
-    n_shards = min(args.n_shards, n)
-    if args.shard_id >= n_shards:
-        logger.info(f"Shard {args.shard_id} >= n_shards {n_shards}, nothing to do")
+    effective_shards = min(n_shards, n)
+    if shard_id >= effective_shards:
+        logger.info(f"Shard {shard_id} >= n_shards {effective_shards}, nothing to do")
         return
-    start = args.shard_id * n // n_shards
-    end = (args.shard_id + 1) * n // n_shards
+    start = shard_id * n // effective_shards
+    end = (shard_id + 1) * n // effective_shards
     target_ids = set(all_ids[start:end])
-    logger.info(f"Shard {args.shard_id}/{n_shards}: {len(target_ids):,} variants")
+    logger.info(f"Shard {shard_id}/{effective_shards}: {len(target_ids):,} variants")
 
     # ── Output paths ──────────────────────────────────────────────────────
-    output_dir = args.activations / args.probe.name
+    output_dir = activations / probe.name
     output_dir.mkdir(parents=True, exist_ok=True)
-    shard_path = output_dir / f"scores_shard_{args.shard_id}.feather"
+    shard_path = output_dir / f"scores_shard_{shard_id}.feather"
     scores_path = output_dir / "scores.feather"
 
-    exists = shard_path.exists() if args.n_shards > 1 else scores_path.exists()
-    if exists and args.mode == "continue":
-        logger.info(f"Shard {args.shard_id} complete, skipping")
+    exists = shard_path.exists() if n_shards > 1 else scores_path.exists()
+    if exists and mode == "continue":
+        logger.info(f"Shard {shard_id} complete, skipping")
         return
 
     # ── Embedding writer ──────────────────────────────────────────────────
     # Store [3, d_h, d_h] flattened to [3*d_h*d_h] (goodfire-core requires 2D tensors)
     output_storage = FilesystemStorage(output_dir)
-    partition_id = args.shard_id if args.n_shards > 1 else None
+    partition_id = shard_id if n_shards > 1 else None
     writer = ActivationWriter(
         output_storage, "embeddings",
         d_model=3 * d_hidden * d_hidden,
@@ -181,8 +179,8 @@ def main() -> None:
     with torch.no_grad():
         for raw, ids in tqdm(
             iter_dataset(storage, "activations", target_ids, None,
-                         batch_size=args.batch_size, dtype=torch.bfloat16, device="cuda"),
-            desc=f"extract s{args.shard_id}",
+                         batch_size=batch_size, dtype=torch.bfloat16, device="cuda"),
+            desc=f"extract s{shard_id}",
         ):
             # Three views from the same raw batch
             diff_acts = unified_diff(raw).float()
@@ -191,33 +189,33 @@ def main() -> None:
 
             # Embeddings: stack all 3 views → [B, 3, d_h, d_h]
             emb = torch.stack([
-                probe.embedding(diff_acts),
-                probe.embedding(ref_acts),
-                probe.embedding(var_acts),
+                model.embedding(diff_acts),
+                model.embedding(ref_acts),
+                model.embedding(var_acts),
             ], dim=1)
             writer.add(acts=emb.flatten(1).cpu().to(torch.bfloat16), sequence_ids=ids)
 
             # Scores: 3 forward passes, split by head type
-            diff_logits = probe.forward_dict(diff_acts)
-            ref_logits = probe.forward_dict(ref_acts)
-            var_logits = probe.forward_dict(var_acts)
+            diff_logits = model.forward_dict(diff_acts)
+            ref_logits = model.forward_dict(ref_acts)
+            var_logits = model.forward_dict(var_acts)
 
             # Effect heads → score_* from diff view
             for k, v in _scores_from_logits(
-                {h: diff_logits[h] for h in effect_heads}, probe,
+                {h: diff_logits[h] for h in effect_heads}, model,
                 class_labels=class_labels,
             ).items():
                 effect_scores.setdefault(k, []).extend(v)
 
             # Disruption heads → ref_score_* from ref view, var_score_* from var view
             for k, v in _scores_from_logits(
-                {h: ref_logits[h] for h in disruption_heads}, probe, "ref_",
+                {h: ref_logits[h] for h in disruption_heads}, model, "ref_",
                 class_labels=class_labels,
             ).items():
                 ref_scores.setdefault(k, []).extend(v)
 
             for k, v in _scores_from_logits(
-                {h: var_logits[h] for h in disruption_heads}, probe, "var_",
+                {h: var_logits[h] for h in disruption_heads}, model, "var_",
                 class_labels=class_labels,
             ).items():
                 var_scores.setdefault(k, []).extend(v)
@@ -228,10 +226,10 @@ def main() -> None:
 
     # ── Save scores ───────────────────────────────────────────────────────
     df = pl.DataFrame({"variant_id": ids_out, **effect_scores, **ref_scores, **var_scores})
-    out_path = shard_path if args.n_shards > 1 else scores_path
+    out_path = shard_path if n_shards > 1 else scores_path
     df.write_ipc(out_path)
-    logger.info(f"Shard {args.shard_id}: {df.height:,} variants, {len(df.columns)} cols → {output_dir}")
+    logger.info(f"Shard {shard_id}: {df.height:,} variants, {len(df.columns)} cols → {output_dir}")
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)
