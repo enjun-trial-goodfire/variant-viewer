@@ -13,9 +13,7 @@ output "dynamodb_table_name" {
   value       = module.dynamodb.table_name
 }
 
-# Uncomment when API Gateway module is enabled:
-#
-# output "api_gateway_url" {
-#   description = "API Gateway endpoint URL"
-#   value       = module.api_gateway.api_url
-# }
+output "api_gateway_url" {
+  description = "API Gateway endpoint URL"
+  value       = module.api_gateway.api_url
+}

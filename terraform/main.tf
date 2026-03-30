@@ -40,18 +40,18 @@ module "dynamodb" {
   app_name = var.app_name
 }
 
-# ── Steps 5-6: Lambda, API Gateway (uncomment when ready) ───────────────
-#
-# module "lambda_api" {
-#   source         = "./modules/lambda_api"
-#   app_name       = var.app_name
-#   dynamodb_table = module.dynamodb.table_name
-#   dynamodb_arn   = module.dynamodb.table_arn
-# }
-#
-# module "api_gateway" {
-#   source               = "./modules/api_gateway"
-#   app_name             = var.app_name
-#   lambda_invoke_arn    = module.lambda_api.invoke_arn
-#   lambda_function_name = module.lambda_api.function_name
-# }
+# ── Steps 5-6: Lambda + API Gateway ─────────────────────────────────────
+
+module "lambda_api" {
+  source         = "./modules/lambda_api"
+  app_name       = var.app_name
+  dynamodb_table = module.dynamodb.table_name
+  dynamodb_arn   = module.dynamodb.table_arn
+}
+
+module "api_gateway" {
+  source               = "./modules/api_gateway"
+  app_name             = var.app_name
+  lambda_invoke_arn    = module.lambda_api.invoke_arn
+  lambda_function_name = module.lambda_api.function_name
+}
