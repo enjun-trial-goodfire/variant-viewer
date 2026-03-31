@@ -48,14 +48,17 @@ def load_disruption_specs() -> dict[str, HeadSpec]:
 
 
 def preload_positions(activations: Path) -> dict[str, torch.Tensor]:
-    """Load all positions into a dict: sequence_id → [2, 256] int64."""
-    storage = FilesystemStorage(activations)
-    pos_ds = ActivationDataset(storage, "positions", batch_size=128)
+    """Load ALL positions into a dict: sequence_id → [2, 256] int64.
+
+    Every rank needs the full dict, so we read chunks directly (no DDP sharding).
+    """
+    pos_storage = FilesystemStorage(activations)
+    pos_ds = ActivationDataset(pos_storage, "positions", batch_size=512)
     pos_dict: dict[str, torch.Tensor] = {}
-    for batch in tqdm(pos_ds.training_iterator(device="cpu", n_epochs=1, shuffle=False, drop_last=False),
-                      desc="Loading positions"):
-        for i, sid in enumerate(batch.sequence_ids):
-            pos_dict[sid] = batch.acts[i]
+    for chunk_id in tqdm(range(pos_ds.num_chunks), desc="Loading positions"):
+        chunk = pos_ds.load_chunk(chunk_id)
+        for i, sid in enumerate(chunk.sequence_ids):
+            pos_dict[sid] = chunk.acts[i]
     logger.info(f"Positions: {len(pos_dict):,} variants")
     return pos_dict
 
