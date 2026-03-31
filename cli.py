@@ -11,6 +11,7 @@ Usage:
     uv run vv pipeline $ACTS/probe_v11           # full chain: extract → eval → build
 """
 
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -18,27 +19,46 @@ import typer
 from rich import print as rprint
 
 app = typer.Typer(help="Variant Effect Viewer", no_args_is_help=True)
+ROOT = Path(__file__).parent
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _sbatch(*args: str) -> str:
+    """Submit a SLURM job, return the job ID."""
+    result = subprocess.run(
+        ["sbatch", "--parsable", *args],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if result.returncode != 0:
+        rprint(f"[red]sbatch failed:[/] {result.stderr.strip()}")
+        raise typer.Exit(1)
+    return result.stdout.strip()
+
+
+# ── Commands ─────────────────────────────────────────────────────────────
 
 
 @app.command()
-def check(probe: str = typer.Argument("probe_v9", help="Probe name")):
+def check(probe: str = typer.Argument("probe_v11", help="Probe name")):
     """Validate all required data and artifacts exist."""
-    import subprocess
-    result = subprocess.run(["bash", "preflight.sh", probe], cwd=Path(__file__).parent)
+    result = subprocess.run(["bash", "preflight.sh", probe], cwd=ROOT)
     raise typer.Exit(result.returncode)
 
 
 @app.command()
 def build(
-    probe: str = typer.Option("probe_v9", help="Probe name (e.g. probe_v9, probe_v11)"),
+    probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
     umap: bool = typer.Option(False, help="Compute UMAP embedding (~40s)"),
     neighbors: bool = typer.Option(False, help="Compute nearest neighbors (GPU)"),
     sync: Optional[Path] = typer.Option(None, help="Rsync staging to this directory after build"),
+    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants, skip UMAP + neighbors"),
 ):
     """Build the static variant viewer site to /tmp."""
     from build import main as _build
 
-    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors, probe=probe)
+    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors, probe=probe, dev=dev)
     rprint(f"[green]Built to:[/] {staging}")
 
 
@@ -54,8 +74,10 @@ def serve(
         raise typer.Exit(1)
 
     import os
+
     import uvicorn
     from loguru import logger
+
     from serve import create_app
 
     server = create_app(build_dir)
@@ -67,18 +89,14 @@ def serve(
 
 @app.command()
 def extract(
-    probe: Path = typer.Option(..., help="Probe directory (e.g., $ACTS/probe_v9)"),
+    probe: Path = typer.Option(..., help="Probe directory (e.g., $ACTS/probe_v11)"),
     activations: Path = typer.Option(..., help="Activations storage directory"),
     shards: int = typer.Option(8, help="Number of parallel SLURM shards"),
 ):
     """Submit extract jobs to SLURM (parallel shards)."""
-    _sbatch(
-        f"--array=0-{shards - 1}",
-        "pipeline/extract.sh",
-        "--probe", str(probe),
-        "--activations", str(activations),
-        desc=f"extract ({shards} shards)",
-    )
+    job_id = _sbatch(f"--array=0-{shards - 1}", "pipeline/extract.sh",
+                     "--probe", str(probe), "--activations", str(activations))
+    rprint(f"[green]Submitted extract ({shards} shards):[/] job {job_id}")
 
 
 @app.command()
@@ -92,7 +110,8 @@ def train(
     args = ["--gpus", str(gpus), f"--time={time}", "pipeline/train.sh", phase]
     if checkpoint:
         args.extend(["--checkpoint", str(checkpoint)])
-    _sbatch(*args, desc=f"train ({phase}, {gpus} GPU)")
+    job_id = _sbatch(*args)
+    rprint(f"[green]Submitted train ({phase}, {gpus} GPU):[/] job {job_id}")
 
 
 @app.command()
@@ -101,10 +120,9 @@ def eval(
     preset: str = typer.Option("deconfounded-full", help="Annotation preset"),
 ):
     """Compute per-head eval metrics → eval.json (runs locally, no SLURM)."""
-    import subprocess
     result = subprocess.run(
         ["uv", "run", "python", "pipeline/eval.py", "--probe-dir", str(probe_dir), "--preset", preset],
-        cwd=Path(__file__).parent,
+        cwd=ROOT,
     )
     raise typer.Exit(result.returncode)
 
@@ -115,14 +133,9 @@ def log_eval(
     project: str = typer.Option("gfm-probes", help="W&B project"),
     name: str = typer.Option(None, help="W&B run name (default: probe dir name)"),
 ):
-    """Upload eval.json to wandb as a Table for cross-run comparison.
-
-    Creates a wandb run with a per-head metrics table (AUC, correlation, accuracy)
-    and summary scalars. Use wandb's run comparer to scatter v9 vs v10 heads.
-
-    Works for both new and old probes — backfill historical eval.json files.
-    """
+    """Upload eval.json to wandb as a Table for cross-run comparison."""
     import json
+
     import wandb
 
     eval_path = probe_dir / "eval.json"
@@ -133,7 +146,6 @@ def log_eval(
     eval_data = json.loads(eval_path.read_text())
     run_name = name or probe_dir.name
 
-    # Config from config.json if available
     config = {}
     config_path = probe_dir / "config.json"
     if config_path.exists():
@@ -142,7 +154,6 @@ def log_eval(
 
     run = wandb.init(project=project, name=run_name, config=config, job_type="eval")
 
-    # Per-head table — the key artifact for cross-run scatter
     table = wandb.Table(columns=["head", "kind", "auc", "correlation", "accuracy", "mse", "n"])
     aucs, corrs = [], []
     for head, metrics in eval_data.items():
@@ -150,14 +161,13 @@ def log_eval(
             head, metrics.get("kind"), metrics.get("auc"), metrics.get("correlation"),
             metrics.get("accuracy"), metrics.get("mse"), metrics.get("n", 0),
         )
-        if "auc" in metrics and metrics["auc"] is not None:
+        if metrics.get("auc") is not None:
             aucs.append(metrics["auc"])
-        if "correlation" in metrics and metrics["correlation"] is not None:
+        if metrics.get("correlation") is not None:
             corrs.append(metrics["correlation"])
 
     wandb.log({"eval/heads": table})
 
-    # Summary scalars — show in the wandb runs table for quick comparison
     if aucs:
         run.summary["mean_auc"] = sum(aucs) / len(aucs)
     if corrs:
@@ -166,7 +176,6 @@ def log_eval(
         run.summary["pathogenic_auc"] = eval_data["pathogenic"]["auc"]
     run.summary["n_heads"] = len(eval_data)
 
-    # Upload eval.json as artifact
     artifact = wandb.Artifact(f"eval-{run_name}", type="eval")
     artifact.add_file(str(eval_path))
     if config_path.exists():
@@ -179,32 +188,57 @@ def log_eval(
 
 @app.command()
 def pipeline(
-    probe: Path = typer.Argument(..., help="Probe directory (e.g., $ACTS/probe_v9)"),
+    probe: Path = typer.Argument(..., help="Probe directory (e.g., $ACTS/probe_v11)"),
     labeled_only: bool = typer.Option(False, help="Skip VUS extraction"),
 ):
-    """Run the full pipeline: extract → finalize → eval → build."""
-    import subprocess
-    args = [str(probe)]
-    if labeled_only:
-        args.append("--labeled-only")
-    result = subprocess.run(["bash", "pipeline/pipeline.sh"] + args, cwd=Path(__file__).parent)
-    raise typer.Exit(result.returncode)
+    """Full pipeline: extract → finalize → eval → build.
 
+    Submits SLURM jobs with dependency chains and exits immediately.
+    """
+    probe_name = probe.name
+    acts = probe.parent
+    vus = acts.parent / "clinvar_evo2_vus"
 
-def _sbatch(*args: str, desc: str = "job"):
-    """Submit a SLURM job and print the job ID."""
-    import subprocess
-    result = subprocess.run(
-        ["sbatch", "--parsable", *args],
-        capture_output=True, text=True, cwd=Path(__file__).parent,
+    for f in ("weights.pt", "config.json"):
+        if not (probe / f).exists():
+            rprint(f"[red]Missing {probe / f} — run training first[/]")
+            raise typer.Exit(1)
+
+    # Clean stale SQLite WAL locks (NFS + WAL = deadlock)
+    for base in (acts, vus):
+        for suffix in ("-shm", "-wal"):
+            (base / "activations" / f"index.sqlite{suffix}").unlink(missing_ok=True)
+
+    # Datasets to process: always labeled, optionally VUS
+    datasets = [("labeled", acts)]
+    if not labeled_only:
+        datasets.append(("vus", vus))
+
+    rprint(f"[bold]=== Pipeline: {probe_name} ===[/]")
+
+    # Extract → Finalize per dataset
+    finalizes = []
+    for name, path in datasets:
+        ext = _sbatch("--array=0-7", "pipeline/extract.sh",
+                       "--probe", str(probe), "--activations", str(path))
+        fin = _sbatch(f"--dependency=afterok:{ext}",
+                       "pipeline/finalize.sh", str(path / probe_name))
+        rprint(f"  {name}: extract={ext} → finalize={fin}")
+        finalizes.append(fin)
+
+    # Eval + log-eval + build after all finalizes
+    wait_for = ":".join(finalizes)
+    eval_cmd = (
+        f"cd ${{SLURM_SUBMIT_DIR}} && "
+        f"uv run --frozen python pipeline/eval.py --probe-dir '{acts / probe_name}' && "
+        f"uv run --frozen --extra train vv log-eval '{acts / probe_name}' && "
+        f"uv run --frozen vv build --probe {probe_name}"
     )
-    if result.returncode == 0:
-        job_id = result.stdout.strip()
-        rprint(f"[green]Submitted {desc}:[/] job {job_id}")
-        rprint(f"  Monitor: [dim]squeue -j {job_id}[/]")
-    else:
-        rprint(f"[red]Failed to submit {desc}:[/] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    eval_id = _sbatch(f"--dependency=afterok:{wait_for}",
+                      "--job-name=eval-build", "--gpus=1", "--time=02:00:00",
+                      "--output=outputs/eval_build_%j.out", f"--wrap={eval_cmd}")
+    rprint(f"  eval+build: {eval_id} (after {wait_for})")
+    rprint("\n[green]Pipeline submitted.[/] Monitor: squeue -u $(whoami)")
 
 
 if __name__ == "__main__":

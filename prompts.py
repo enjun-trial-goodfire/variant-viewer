@@ -4,8 +4,10 @@ Single source of truth for the system prompt and prompt builder.
 Used by serve.py (on-demand) and pipeline/interpret.py (batch).
 """
 
+from pathlib import Path
+
 from constants import calibration_text
-from display import display_name
+from display import _EFFECT_PREDICTOR_HEADS, curated_group, display_name
 
 SYSTEM_PROMPT = """\
 You are a clinical genomics expert interpreting variant pathogenicity predictions \
@@ -93,27 +95,59 @@ def build_prompt(v: dict) -> str:
         lines.append(cal)
     lines.append("")
 
-    # Disruption attribution (z-scored deltas)
-    attr_heads = v.get("attribution") if isinstance(v.get("attribution"), list) else []
+    # Curated disruption profile (filtered by quality + no tissue-specific/conservation/clinical)
     disruption = v.get("disruption", {})
+    effect = v.get("effect", {})
     gt = v.get("gt", {})
 
-    if attr_heads:
-        lines.append("### Disruption Attribution (ranked by gated z-score)")
-        lines.append("| Feature | z-score | delta | Database | Signal quality |")
-        lines.append("|---------|---------|-------|----------|---------------|")
-        for h in attr_heads[:15]:
-            name = h["name"]
-            z = h.get("z", 0)
-            delta = disruption.get(name)
-            delta_str = f"{delta:+.3f}" if isinstance(delta, (int, float)) else ""
+    # Get curated head sets
+    curated_dis = curated_group(set(disruption.keys()), quality_file=Path("head_quality.json"))
+    curated_dis_heads = set()
+    for heads in curated_dis.values():
+        curated_dis_heads.update(heads)
+
+    if disruption and curated_dis_heads:
+        # Filter and sort by |delta|
+        filtered = []
+        for name, val in disruption.items():
+            if name not in curated_dis_heads:
+                continue
+            if isinstance(val, list) and len(val) == 2:
+                ref_val, var_val = val
+                delta = var_val - ref_val
+            elif isinstance(val, (int, float)):
+                delta = val
+                ref_val = var_val = None
+            else:
+                continue
+            filtered.append((name, ref_val, var_val, delta))
+        filtered.sort(key=lambda x: abs(x[3]), reverse=True)
+
+        lines.append(f"### Disruption Profile ({len(filtered)} heads, ranked by |delta|)")
+        lines.append("| Feature | ref | var | delta | Database |")
+        lines.append("|---------|-----|-----|-------|----------|")
+        for name, ref_val, var_val, delta in filtered:
+            ref_str = f"{ref_val:.3f}" if ref_val is not None else ""
+            var_str = f"{var_val:.3f}" if var_val is not None else ""
             gt_val = gt.get(name)
             gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""
-            # Help the model assess signal quality
-            abs_delta = abs(delta) if isinstance(delta, (int, float)) else 0
-            quality = "strong" if abs_delta > 0.05 else "moderate" if abs_delta > 0.02 else "weak (small delta)"
-            lines.append(f"| {display_name(name)} | {z:.1f}\u03c3 | {delta_str} | {gt_str} | {quality} |")
+            lines.append(f"| {display_name(name)} | {ref_str} | {var_str} | {delta:+.3f} | {gt_str} |")
         lines.append("")
+
+    if effect:
+        # Filter out clinical predictors from effect heads
+        filtered_eff = [(name, val) for name, val in effect.items()
+                        if name not in _EFFECT_PREDICTOR_HEADS and isinstance(val, (int, float))]
+        filtered_eff.sort(key=lambda x: abs(x[1]), reverse=True)
+        if filtered_eff:
+            lines.append(f"### Effect Predictions ({len(filtered_eff)} heads, ranked by |score|)")
+            lines.append("| Feature | score | Database |")
+            lines.append("|---------|-------|----------|")
+            for name, val in filtered_eff:
+                gt_val = gt.get(name)
+                gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""
+                lines.append(f"| {display_name(name)} | {val:.3f} | {gt_str} |")
+            lines.append("")
 
     # Neighbors
     neighbors = v.get("neighbors", [])

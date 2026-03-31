@@ -6,7 +6,8 @@
 #   sbatch --gpus=4 pipeline/train.sh finetune-cmd --checkpoint $ACTS/probe_v11/pretrain.pt
 
 #SBATCH --job-name=train_probe
-#SBATCH --time=08:00:00
+#SBATCH --gpus=4
+#SBATCH --time=04:00:00
 #SBATCH --output=outputs/train_%j.out
 #SBATCH --error=outputs/train_%j.err
 

@@ -6,11 +6,10 @@
 
 set -euo pipefail
 
-PROBE="${1:-probe_v9}"
-ARTIFACTS="/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian"
+PROBE="${1:-probe_v11}"
+ARTIFACTS="${VV_ARTIFACTS:-/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian}"
 LABELED="$ARTIFACTS/clinvar_evo2_deconfounded_full"
 VUS="$ARTIFACTS/clinvar_evo2_vus"
-VEP="$ARTIFACTS/clinvar_evo2_labeled/variant_annotations"
 DATA="$(dirname "$0")/data"
 
 ok=0
@@ -30,10 +29,8 @@ echo "=== Preflight Check: $PROBE ==="
 echo ""
 
 echo "Local data (data/):"
-check "$DATA/clinvar/deconfounded-full/metadata.feather" "Labeled metadata"
-check "$DATA/clinvar/vus/metadata.feather" "VUS metadata"
-check "$DATA/gencode/genes.feather" "GENCODE genes"
-check "$DATA/clinvar/deconfounded-full/annotations.feather" "Annotations"
+check "$DATA/variants.parquet" "Variants parquet"
+check "$DATA/heads.json" "Heads JSON"
 
 echo ""
 echo "Shared artifacts (probe scores + embeddings):"
@@ -44,21 +41,9 @@ check "$VUS/$PROBE/scores.feather" "VUS scores"
 check "$VUS/$PROBE/embeddings" "VUS embeddings"
 
 echo ""
-echo "VEP annotations:"
-n_vep=$(find "$VEP" -maxdepth 1 -name 'variant_annotations_chr*.parquet' 2>/dev/null | wc -l)
-if [ "$n_vep" -ge 22 ]; then
-    echo "  OK  $n_vep chromosome parquets"
-    ok=$((ok + 1))
-else
-    echo "  MISSING  Only $n_vep/24 chromosome parquets at $VEP"
-    fail=$((fail + 1))
-fi
-
-echo ""
 echo "Optional:"
 [ -f "$LABELED/$PROBE/eval.json" ] && echo "  OK  eval.json" || echo "  --  eval.json (no eval badges)"
 [ -f "$LABELED/$PROBE/attribution.json" ] && echo "  OK  attribution.json" || echo "  --  attribution.json (no attribution)"
-[ -f "$DATA/clinvar/submissions.feather" ] && echo "  OK  submissions.feather" || echo "  --  submissions.feather (no ACMG/submitters)"
 
 echo ""
 echo "Dependencies:"

@@ -15,15 +15,16 @@ Outputs (written to {activations}/{probe_name}/):
   scores.feather  ref_score_*, var_score_*, score_*, pred_* columns
 
 Usage:
-    python scripts/extract.py --probe $ACTS/probe_v9 --activations $ACTS
+    python scripts/extract.py --probe $ACTS/probe_v11 --activations $ACTS
 
 Parallel (SLURM array):
     EXTRACT=$(sbatch --parsable --array=0-7 scripts/extract.sh \\
-        --probe $ACTS/probe_v9 --activations $ACTS)
-    sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh $ACTS/probe_v9
+        --probe $ACTS/probe_v11 --activations $ACTS)
+    sbatch --dependency=afterok:${EXTRACT} scripts/finalize_embed.sh $ACTS/probe_v11
 """
 
 import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import polars as pl
@@ -34,7 +35,6 @@ from loguru import logger
 from tqdm import tqdm
 
 from probe.covariance import MultiHeadCovProbeV2
-from collections.abc import Callable, Iterator
 
 # ── Activation view transforms (inlined from streaming.py) ────────────
 # Layout: [B, direction=2, view=3, K, d]. direction: 0=fwd, 1=bwd. view: 0=var, 1=ref, 2=ref_cross
@@ -111,11 +111,8 @@ def main(
     model = MultiHeadCovProbeV2.from_checkpoint(str(probe / "weights.pt")).cuda().eval()
     config = json.loads((probe / "config.json").read_text())
 
-    # Support both old naming (ref_heads/diff_heads) and new (disruption_heads/effect_heads)
-    disruption_heads = frozenset(config.get("disruption_heads", config.get("ref_heads", ())))
-    effect_heads = frozenset(config.get("effect_heads", config.get("diff_heads", ())))
-    assert disruption_heads, "config.json missing disruption_heads (or ref_heads) — check training script"
-    assert effect_heads, "config.json missing effect_heads (or diff_heads) — check training script"
+    disruption_heads = frozenset(config["disruption_heads"])
+    effect_heads = frozenset(config["effect_heads"])
 
     d_hidden = model.d_hidden
     logger.info(f"Probe: {len(disruption_heads)} disruption + {len(effect_heads)} effect heads, d_hidden={d_hidden}")
