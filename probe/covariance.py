@@ -209,12 +209,11 @@ def _soft_cross_entropy(
 
 
 def _focal_cross_entropy(logits: Tensor, labels: Tensor, gamma: float) -> Tensor:
-    """Focal loss: (1-p_t)^gamma * CE. Reduces to CE when gamma=0."""
-    if logits.numel() == 0:
-        return logits.new_tensor(0.0)
-    ce = torch.nn.functional.cross_entropy(logits, labels, reduction="none")
-    p_t = torch.exp(-ce)  # probability of correct class
-    return ((1 - p_t) ** gamma * ce).mean()
+    """Focal loss: -(1-p_t)^gamma log(p_t). Reduces to CE when gamma=0."""
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    targets = torch.nn.functional.one_hot(labels, logits.size(-1)).float()
+    p_t = (log_probs.exp() * targets).sum(dim=-1)
+    return -((1 - p_t) ** gamma * (targets * log_probs).sum(dim=-1)).mean()
 
 
 def multihead_loss_v2(

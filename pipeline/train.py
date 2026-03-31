@@ -196,7 +196,6 @@ def train(
             loss = loss_diff + loss_ref
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(probe.parameters(), max_norm=1.0)
             optimizer.step()
 
             if rank == 0:
