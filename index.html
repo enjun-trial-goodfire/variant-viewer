@@ -594,7 +594,7 @@ function showLanding() {
         ${umapMode === 'predicted' ? scoreLeg : labelLeg}
       </div>
     </div>`;
-    ensureUmap().then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
+    Promise.all([globalReady, ensureUmap()]).then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
   });
 }
 
