@@ -34,11 +34,12 @@ def build(
     umap: bool = typer.Option(False, help="Compute UMAP embedding (~40s)"),
     neighbors: bool = typer.Option(False, help="Compute nearest neighbors (GPU)"),
     sync: Optional[Path] = typer.Option(None, help="Rsync staging to this directory after build"),
+    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants, skip UMAP + neighbors"),
 ):
     """Build the static variant viewer site to /tmp."""
     from build import main as _build
 
-    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors, probe=probe)
+    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors, probe=probe, dev=dev)
     rprint(f"[green]Built to:[/] {staging}")
 
 

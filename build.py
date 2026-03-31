@@ -33,7 +33,7 @@ from umap import UMAP
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 
 from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES, LABEL_TO_IDX
-from display import auto_group, display_name
+from display import auto_group, curated_group, curated_effect_group, display_name
 from paths import ARTIFACTS, MAYO_DATA, sanitize_vid
 from loaders import load_vep, load_domain_names, resolve_domains, load_metadata
 
@@ -43,7 +43,7 @@ VUS = ARTIFACTS / "clinvar_evo2_vus"
 PROBE = "probe_v9"  # default, overridden by main(probe=...)
 K_NEIGHBORS = 10
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
-VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations"
+VARIANT_ANN_DIR = ARTIFACTS / "clinvar_evo2_labeled" / "variant_annotations_v2"
 VEP_COLS = (
     "variant_id", "vep_hgvsc", "vep_hgvsp", "vep_impact",
     "vep_exon", "vep_transcript_id", "vep_protein_id", "vep_swissprot",
@@ -353,19 +353,17 @@ def _build_variant_dict(
     """Build the JSON-serializable dict for a single variant at row index i."""
     vid = col_data["variant_id"][i]
 
-    # Only include heads with meaningful delta
+    # All disruption heads with ref/var values
     disruption = {}
     for h in disruption_heads:
         r = ref_d[h][i]
         if r is None:
             continue
         va = var_d[h][i] if var_d[h][i] is not None else r
-        delta = round(va - r, 4)
-        if abs(delta) > 0.01:
-            disruption[h] = delta
+        disruption[h] = [round(r, 4), round(va, 4)]
 
     effect = {h: eff_d[h][i] for h in effect_heads if eff_d[h][i] is not None}
-    gt = {h: v for h, col in gt_d.items() if (v := col[i]) is not None and v > 0}
+    gt = {h: v for h, col in gt_d.items() if (v := col[i]) is not None and v >= 0}
 
     nbs = nb_map.get(vid, [])
     n_p = sum(1 for nb in nbs if "pathogenic" in nb.get("label", ""))
@@ -512,6 +510,18 @@ def write_global(
     ).float()  # (n_heads, n_variants)
 
     n_disruption = len(disruption_heads)
+
+    # Per-head delta stats for percentile normalization (before remapping)
+    head_stats = {}
+    for j, h in enumerate(disruption_heads):
+        vals = score_matrix[j]
+        valid = vals[~vals.isnan()]
+        if len(valid) > 10:
+            head_stats[h] = {
+                "mean": round(valid.mean().item(), 5),
+                "std": round(valid.std().item(), 5),
+            }
+
     # Remap delta heads from [-1,1] -> [0,1] for histogram binning
     score_matrix[:n_disruption] = (score_matrix[:n_disruption] + 1) / 2
 
@@ -546,8 +556,13 @@ def write_global(
             **hh,
         },
         "eval": eval_metrics,
-        "heads": {"disruption": auto_group(set(disruption_heads)), "effect": auto_group(set(effect_heads))},
+        "heads": {
+            "disruption": curated_group(set(disruption_heads), quality_file=Path("head_quality.json")),
+            "effect": curated_effect_group(set(effect_heads)),
+        },
         "display": {h: display_name(h, domain_cache) for h in all_head_names},
+        "head_stats": head_stats,
+        "descriptions": json.loads(Path("head_descriptions.json").read_text()) if Path("head_descriptions.json").exists() else {},
         "decomposition": json.loads(decomp_path.read_text()) if decomp_path.exists() else None,
     }))
 
@@ -588,6 +603,7 @@ def main(
     umap: bool = False,
     neighbors: bool = False,
     probe: str = PROBE,
+    dev: int | None = None,
 ) -> Path:
     """Build the variant viewer static site.
 
@@ -626,6 +642,11 @@ def main(
     # ── Load ─────────────────────────────────────────────────────────────
     _t("Loading...")
     df, cfg = load_data()
+    if dev:
+        df = df.head(dev)
+        umap = False
+        neighbors = False
+        logger.info(f"Dev mode: {dev} variants, skipping UMAP + neighbors")
     domain_cache = load_domain_names()
     _t(f"{df.height:,} variants loaded, {len(domain_cache):,} domain names cached")
 
