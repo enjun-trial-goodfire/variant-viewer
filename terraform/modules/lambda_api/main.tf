@@ -56,10 +56,8 @@ resource "aws_iam_role_policy" "dynamodb_write" {
   policy = data.aws_iam_policy_document.dynamodb_write.json
 }
 
-# SQS send access for enqueuing processing requests (conditional on SQS being configured)
+# SQS send access for enqueuing processing requests
 data "aws_iam_policy_document" "sqs_send" {
-  count = var.sqs_queue_arn != "" ? 1 : 0
-
   statement {
     actions   = ["sqs:SendMessage"]
     resources = [var.sqs_queue_arn]
@@ -67,10 +65,9 @@ data "aws_iam_policy_document" "sqs_send" {
 }
 
 resource "aws_iam_role_policy" "sqs_send" {
-  count  = var.sqs_queue_arn != "" ? 1 : 0
   name   = "sqs-send"
   role   = aws_iam_role.lambda.id
-  policy = data.aws_iam_policy_document.sqs_send[0].json
+  policy = data.aws_iam_policy_document.sqs_send.json
 }
 
 # ── Lambda function ──────────────────────────────────────────────────────

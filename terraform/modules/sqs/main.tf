@@ -14,7 +14,7 @@ resource "aws_sqs_queue" "processing" {
   fifo_queue                 = true
   visibility_timeout_seconds = 900   # 15 min — must exceed worker Lambda timeout (840s)
   message_retention_seconds  = 86400 # 1 day
-  receive_message_wait_time_seconds = 20 # long-poll
+  receive_wait_time_seconds = 20 # long-poll
 
   # Explicit MessageDeduplicationId per message (not content-based)
   content_based_deduplication = false
