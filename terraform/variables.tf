@@ -9,3 +9,8 @@ variable "aws_region" {
   type        = string
   default     = "us-east-1"
 }
+
+variable "anthropic_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing the Anthropic API key"
+  type        = string
+}

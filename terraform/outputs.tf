@@ -17,3 +17,13 @@ output "api_gateway_url" {
   description = "API Gateway endpoint URL"
   value       = module.api_gateway.api_url
 }
+
+output "sqs_queue_url" {
+  description = "SQS processing queue URL"
+  value       = module.sqs.queue_url
+}
+
+output "worker_function_name" {
+  description = "Worker Lambda function name"
+  value       = module.lambda_worker.function_name
+}

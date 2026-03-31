@@ -47,6 +47,8 @@ module "lambda_api" {
   app_name       = var.app_name
   dynamodb_table = module.dynamodb.table_name
   dynamodb_arn   = module.dynamodb.table_arn
+  sqs_queue_url  = module.sqs.queue_url
+  sqs_queue_arn  = module.sqs.queue_arn
 }
 
 module "api_gateway" {
@@ -54,4 +56,23 @@ module "api_gateway" {
   app_name             = var.app_name
   lambda_invoke_arn    = module.lambda_api.invoke_arn
   lambda_function_name = module.lambda_api.function_name
+}
+
+# ── SQS processing queue ─────────────────────────────────────────────
+
+module "sqs" {
+  source   = "./modules/sqs"
+  app_name = var.app_name
+}
+
+# ── Worker Lambda ─────────────────────────────────────────────────────
+
+module "lambda_worker" {
+  source               = "./modules/lambda_worker"
+  app_name             = var.app_name
+  dynamodb_table       = module.dynamodb.table_name
+  dynamodb_arn         = module.dynamodb.table_arn
+  sqs_queue_url        = module.sqs.queue_url
+  sqs_queue_arn        = module.sqs.queue_arn
+  anthropic_secret_arn = var.anthropic_secret_arn
 }
