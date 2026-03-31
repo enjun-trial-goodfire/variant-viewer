@@ -142,16 +142,15 @@ def load_data() -> tuple[pl.DataFrame, dict]:
     df = df.with_columns((pl.col("pos") + 1).alias("vcf_pos"))
 
     # Decode categorical head predictions to string labels
-    if "pred_consequence" in df.columns:
-        from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
+    from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
+    if "pred_aa_swap" in df.columns:
         df = df.with_columns(
-            pl.col("pred_consequence").replace_strict(
-                dict(enumerate(CONSEQUENCE_CLASSES)), default="unknown"
-            ).alias("pred_consequence_str"),
             pl.col("pred_aa_swap").replace_strict(
                 dict(enumerate(AA_SWAP_CLASSES)), default=None
             ).alias("substitution"),
         )
+    if "substitution" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias("substitution"))
 
     # Rename annotation columns to gt_* prefix for display
     meta_cols = {"variant_id", "chrom", "pos", "ref", "alt", "gene_name", "label",
