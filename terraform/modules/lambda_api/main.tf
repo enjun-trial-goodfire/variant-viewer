@@ -42,6 +42,37 @@ resource "aws_iam_role_policy" "dynamodb_read" {
   policy = data.aws_iam_policy_document.dynamodb_read.json
 }
 
+# DynamoDB write access for analysis endpoint (conditional update on processing_status)
+data "aws_iam_policy_document" "dynamodb_write" {
+  statement {
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [var.dynamodb_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "dynamodb_write" {
+  name   = "dynamodb-write"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.dynamodb_write.json
+}
+
+# SQS send access for enqueuing processing requests (conditional on SQS being configured)
+data "aws_iam_policy_document" "sqs_send" {
+  count = var.sqs_queue_arn != "" ? 1 : 0
+
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = [var.sqs_queue_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "sqs_send" {
+  count  = var.sqs_queue_arn != "" ? 1 : 0
+  name   = "sqs-send"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.sqs_send[0].json
+}
+
 # ── Lambda function ──────────────────────────────────────────────────────
 
 data "archive_file" "lambda_zip" {
@@ -62,7 +93,8 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      TABLE_NAME = var.dynamodb_table
+      TABLE_NAME    = var.dynamodb_table
+      SQS_QUEUE_URL = var.sqs_queue_url
     }
   }
 }
