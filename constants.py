@@ -4,7 +4,7 @@ Single source of truth for biology constants, calibration data, probe config,
 and model settings. Imported by build.py, serve.py, and pipeline scripts.
 """
 
-PROBE_NAME = "probe_v11"
+PROBE_NAME = "probe_v12"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 EVAL_KEYS = (("correlation", "r"), ("auc", "AUC"), ("accuracy", "acc"))
 
