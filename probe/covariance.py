@@ -209,11 +209,14 @@ def _soft_cross_entropy(
 
 
 def _focal_cross_entropy(logits: Tensor, labels: Tensor, gamma: float) -> Tensor:
-    """Focal loss: -(1-p_t)^gamma log(p_t). Reduces to CE when gamma=0."""
-    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-    targets = torch.nn.functional.one_hot(labels, logits.size(-1)).float()
-    p_t = (log_probs.exp() * targets).sum(dim=-1)
-    return -((1 - p_t) ** gamma * (targets * log_probs).sum(dim=-1)).mean()
+    """Focal loss: -(1-p_t)^gamma log(p_t). Reduces to CE when gamma=0.
+
+    For gamma < 1, the gradient has a (1-p_t)^(gamma-1) term that diverges
+    as p_t → 1. We clamp p_t to [eps, 1-eps] to keep gradients bounded.
+    """
+    ce = torch.nn.functional.cross_entropy(logits, labels, reduction="none")
+    p_t = torch.exp(-ce).clamp(1e-6, 1 - 1e-6)
+    return ((1 - p_t) ** gamma * ce).mean()
 
 
 def multihead_loss_v2(
