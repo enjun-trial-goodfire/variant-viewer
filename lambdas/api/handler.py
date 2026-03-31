@@ -58,6 +58,21 @@ def handle_get_variant(variant_id):
 
     # Map variant_id back to id for frontend compatibility
     item["id"] = item.pop("variant_id")
+
+    # Normalize disruption values: older build.py stores [ref, var] pairs,
+    # current frontend expects delta scalars (var - ref, filtered to abs > 0.01).
+    # Once data is re-ingested from latest build.py, this conversion is a no-op.
+    disruption = item.get("disruption", {})
+    if disruption:
+        sample = next(iter(disruption.values()), None)
+        if isinstance(sample, list):
+            item["disruption"] = {
+                k: round(float(v[1]) - float(v[0]), 4)
+                for k, v in disruption.items()
+                if isinstance(v, list) and len(v) == 2
+                and abs(float(v[1]) - float(v[0])) > 0.01
+            }
+
     return json_response(200, item)
 
 
