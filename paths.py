@@ -1,17 +1,20 @@
-"""Path constants and ID utilities for the variant viewer.
+"""Path constants and ID utilities for the variant viewer."""
 
-Centralizes:
-- Artifact path constants
-- Variant ID sanitization (must match between build.py, serve.py, and JS frontend)
-"""
-
+import os
 from pathlib import Path
 
-# ── Artifact roots ────────────────────────────────────────────────────────
-ARTIFACTS = Path("/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian")
-MAYO_DATA = Path(__file__).parent / "data"
-VEP_DOMAIN_CACHE = ARTIFACTS.parent / "annotations" / "sources" / "cache" / "vep_domain_lookup.json"
+# ── Paths ────────────────────────────────────────────────────────────────
 
+ARTIFACTS = Path(os.environ.get(
+    "VV_ARTIFACTS",
+    "/mnt/polished-lake/artifacts/fellows-shared/life-sciences/genomics/mendelian",
+))
+DATA = Path(__file__).parent / "data"
+VARIANTS = DATA / "variants.parquet"
+HEADS = DATA / "heads.json"
+
+
+# ── ID utilities ─────────────────────────────────────────────────────────
 
 def sanitize_vid(v: str) -> str:
     """Make a variant ID safe for use as a filename.

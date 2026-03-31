@@ -5,7 +5,7 @@ AUC (binary), Pearson correlation (continuous), and accuracy (categorical)
 on the test set. Writes eval.json alongside the probe.
 
 Usage:
-    uv run python pipeline/eval.py --probe-dir $ACTS/probe_v9
+    uv run python pipeline/eval.py --probe-dir $ACTS/probe_v11
 """
 
 import json
@@ -18,25 +18,21 @@ from loguru import logger
 from scipy.stats import pearsonr
 from sklearn.metrics import roc_auc_score
 
-from paths import MAYO_DATA
+from loaders import load_variants
 
 
 def main(
     probe_dir: Path = typer.Option(..., help="Probe directory with scores.feather + split.feather"),
-    preset: str = typer.Option("deconfounded-full", help="Annotation preset"),
     min_samples: int = typer.Option(20, help="Minimum samples for a head to be evaluated"),
 ) -> None:
     scores = pl.read_ipc(str(probe_dir / "scores.feather"))
     split = pl.read_ipc(str(probe_dir / "split.feather"))
     test_ids = set(split.filter(pl.col("split") == "test")["variant_id"].to_list())
 
-    gt = pl.read_ipc(str(MAYO_DATA / "clinvar" / preset / "annotations.feather"))
-    meta = pl.read_ipc(str(MAYO_DATA / "clinvar" / preset / "metadata.feather")).select("variant_id", "label")
-
+    variants = load_variants()
     df = (
         scores
-        .join(gt, on="variant_id", how="left")
-        .join(meta, on="variant_id", how="left")
+        .join(variants, on="variant_id", how="left")
         .filter(pl.col("variant_id").is_in(list(test_ids)))
     )
     logger.info(f"Test set: {df.height:,} variants")
@@ -46,7 +42,7 @@ def main(
     # Effect heads: score_* columns
     for col in [c for c in df.columns if c.startswith("score_") and c != "score_pathogenic"]:
         head = col[6:]
-        if head not in gt.columns:
+        if head not in df.columns:
             continue
         pred = df[col].to_numpy().astype(np.float64)
         truth = df[head].to_numpy().astype(np.float64)
@@ -64,7 +60,7 @@ def main(
     # Disruption heads: ref_score_* columns (use ref view as baseline)
     for col in [c for c in df.columns if c.startswith("ref_score_")]:
         head = col[10:]
-        if head not in gt.columns or head in eval_results:
+        if head not in df.columns or head in eval_results:
             continue
         pred = df[col].to_numpy().astype(np.float64)
         truth = df[head].to_numpy().astype(np.float64)

@@ -16,7 +16,7 @@ from pathlib import Path
 import polars as pl
 import torch
 
-from display import _is_tissue_specific, _is_removed
+from display import _is_removed, _is_tissue_specific
 
 EXCLUDED = frozenset({
     "alphamissense_c", "bayesdel_c", "cadd_c", "cadd_wg_c", "clinpred_c",

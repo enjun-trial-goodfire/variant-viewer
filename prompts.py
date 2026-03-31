@@ -4,8 +4,10 @@ Single source of truth for the system prompt and prompt builder.
 Used by serve.py (on-demand) and pipeline/interpret.py (batch).
 """
 
+from pathlib import Path
+
 from constants import calibration_text
-from display import display_name
+from display import _EFFECT_PREDICTOR_HEADS, curated_group, display_name
 
 SYSTEM_PROMPT = """\
 You are a clinical genomics expert interpreting variant pathogenicity predictions \
@@ -94,15 +96,12 @@ def build_prompt(v: dict) -> str:
     lines.append("")
 
     # Curated disruption profile (filtered by quality + no tissue-specific/conservation/clinical)
-    from display import curated_group, curated_effect_group, _EFFECT_PREDICTOR_HEADS
-    from pathlib import Path as _P
-
     disruption = v.get("disruption", {})
     effect = v.get("effect", {})
     gt = v.get("gt", {})
 
     # Get curated head sets
-    curated_dis = curated_group(set(disruption.keys()), quality_file=_P("head_quality.json"))
+    curated_dis = curated_group(set(disruption.keys()), quality_file=Path("head_quality.json"))
     curated_dis_heads = set()
     for heads in curated_dis.values():
         curated_dis_heads.update(heads)

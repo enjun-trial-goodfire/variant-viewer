@@ -6,7 +6,7 @@
 #
 # Example:
 #   ACTS=/mnt/polished-lake/artifacts/.../clinvar_evo2_deconfounded_full
-#   bash pipeline/pipeline.sh $ACTS/probe_v9
+#   bash pipeline/pipeline.sh $ACTS/probe_v11
 #
 # Chains SLURM jobs with dependencies so the full pipeline runs unattended.
 

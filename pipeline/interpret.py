@@ -23,14 +23,14 @@ import typer
 from loguru import logger
 
 from attribution import attribute
-from constants import CONSEQUENCE_CLASSES, AA_SWAP_CLASSES
-from paths import ARTIFACTS, MAYO_DATA
-from loaders import load_metadata
+from constants import AA_SWAP_CLASSES, CONSEQUENCE_CLASSES
+from loaders import load_heads, load_variants
+from paths import ARTIFACTS
 from prompts import SYSTEM_PROMPT, build_prompt
 
 LABELED_ACT = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 VUS_ACT = ARTIFACTS / "clinvar_evo2_vus"
-PROBE = "probe_v9"
+PROBE = "probe_v11"
 OUTPUT_DIR = VUS_ACT / "interpretations"
 
 CSQ_LABELS = {i: name for i, name in enumerate(CONSEQUENCE_CLASSES)}
@@ -41,33 +41,28 @@ AA_LABELS = {i: name for i, name in enumerate(AA_SWAP_CLASSES)}
 # ---------------------------------------------------------------------------
 def load_data():
     """Load all data needed for interpretation: scores, metadata, attribution, embeddings."""
+    variants = load_variants()
+    heads = load_heads()
+
     labeled_scores = pl.read_ipc(str(LABELED_ACT / PROBE / "scores.feather"))
     vus_scores = pl.read_ipc(str(VUS_ACT / PROBE / "scores.feather"))
 
-    labeled_meta = load_metadata("deconfounded-full")
-    vus_meta = load_metadata("vus")
-
-    gt_annotations = pl.read_ipc(str(MAYO_DATA / "clinvar" / "deconfounded-full" / "annotations.feather"))
-
-    meta_cols = ("variant_id", "label", "consequence", "gene_name",
-                 "clinical_significance", "stars", "disease_name")
-
     labeled = labeled_scores.join(
-        labeled_meta.select(*meta_cols), on="variant_id", how="left"
-    ).with_columns(pl.col("stars").cast(pl.Int32))
-
-    gt_cols = [c for c in gt_annotations.columns if c != "variant_id"]
-    labeled = labeled.join(
-        gt_annotations.rename({c: f"gt_{c}" for c in gt_cols}),
-        left_on="variant_id", right_on="variant_id", how="left",
+        variants.filter(pl.col("label") != "VUS"), on="variant_id", how="left",
+    )
+    vus = vus_scores.join(
+        variants.filter(pl.col("label") == "VUS"), on="variant_id", how="left",
     )
 
-    vus = vus_scores.join(
-        vus_meta.select(*(c for c in meta_cols if c not in ("label", "stars"))),
-        on="variant_id", how="left",
-    ).with_columns(pl.lit("VUS").alias("label"), pl.lit(0).cast(pl.Int32).alias("stars"))
+    # Rename head columns to gt_* prefix
+    meta_cols = {"variant_id", "chrom", "pos", "ref", "alt", "gene_name", "label",
+                 "clinical_significance", "stars", "consequence", "disease_name",
+                 "rs_id", "allele_id", "gene_id", "gene_strand"}
+    gt_renames = {h: f"gt_{h}" for h in heads if h not in meta_cols}
 
-    all_v = pl.concat([labeled, vus], how="diagonal")
+    all_v = pl.concat([labeled, vus], how="diagonal").rename(
+        {k: v for k, v in gt_renames.items() if k in labeled.columns or k in vus.columns}
+    )
 
     if "pred_consequence" in all_v.columns:
         all_v = all_v.with_columns(
