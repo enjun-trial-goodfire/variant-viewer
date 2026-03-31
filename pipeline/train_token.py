@@ -1,13 +1,12 @@
-"""Train per-token reference probe by unpacking sequence activations on the fly.
+"""Train per-token reference probe by co-iterating activations + token_labels.
 
-Streams the existing [2, 3, 256, 4096] activations, unpacks to per-token
-vectors, resolves annotations from token_annotations_normalized, trains.
+Streams activations and pre-generated token_labels chunk by chunk (same chunk
+boundaries, same sequence IDs). Each variant's [2, 3, 256, 4096] activation
+tensor is unpacked to [256, 8192] per-token vectors. Labels come from the
+aligned token_labels dataset [443, 256] per variant.
 
-Only disruption (reference) heads. No sqrtm (bilinear probe). Summing
-token logits at inference = sequence-level outer product (linearity).
-
-Dataset size: 184K variants × 256 tokens = 47M samples per epoch.
-Memory: positions dict ~750MB RAM, label lookup ~60GB RAM.
+Only disruption (reference) heads. Probe with n_sqrtm_iters=0 (bilinear).
+Summing token logits at inference = sequence-level prediction (linearity).
 
 Usage:
     sbatch --gpus=4 pipeline/train_token.sh
@@ -18,7 +17,6 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.distributed as dist
 import typer
@@ -31,7 +29,6 @@ from tqdm import tqdm
 
 from loaders import load_heads
 from paths import ARTIFACTS
-from pipeline.ref_labels import TokenLabelLookup
 from probe.covariance import HeadSpec, MultiHeadCovProbeV2, multihead_loss_v2
 
 DECONFOUNDED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
@@ -45,22 +42,6 @@ def load_disruption_specs() -> dict[str, HeadSpec]:
         for name, info in heads.items()
         if info["category"] != "effect"
     }
-
-
-def preload_positions(activations: Path) -> dict[str, torch.Tensor]:
-    """Load ALL positions into a dict: sequence_id → [2, 256] int64.
-
-    Every rank needs the full dict, so we read chunks directly (no DDP sharding).
-    """
-    pos_storage = FilesystemStorage(activations)
-    pos_ds = ActivationDataset(pos_storage, "positions", batch_size=512)
-    pos_dict: dict[str, torch.Tensor] = {}
-    for chunk_id in tqdm(range(pos_ds.num_chunks), desc="Loading positions"):
-        chunk = pos_ds.load_chunk(chunk_id)
-        for i, sid in enumerate(chunk.sequence_ids):
-            pos_dict[sid] = chunk.acts[i]
-    logger.info(f"Positions: {len(pos_dict):,} variants")
-    return pos_dict
 
 
 def train(
@@ -98,28 +79,22 @@ def train(
     if rank == 0:
         logger.info(f"Disruption heads: {n_heads}")
 
-    # Position + label lookups (CPU, shared across ranks)
-    pos_dict = preload_positions(activations)
-    lookup = TokenLabelLookup(head_names=head_names)
-
-    # Output
-    out_dir = activations / name
-    if rank == 0:
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-    if distributed:
-        dist.barrier()
-
-    # Activation iterator
+    # Datasets
     storage = FilesystemStorage(activations)
-    per_gpu = max(1, batch_size // world_size)
-    act_ds = ActivationDataset(storage, "activations", batch_size=per_gpu)
-    iterator = act_ds.training_iterator(device=str(device), n_epochs=epochs, shuffle=True)
+    acts_ds = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True)
+    labels_ds = ActivationDataset(storage, "token_labels", batch_size=1, include_provenance=True)
 
-    if distributed:
-        steps = torch.tensor([iterator.steps_per_epoch], device=device)
-        dist.all_reduce(steps, op=dist.ReduceOp.MIN)
-        iterator.set_max_steps(int(steps.item()))
+    assert acts_ds.num_chunks == labels_ds.num_chunks, (
+        f"Chunk count mismatch: activations={acts_ds.num_chunks}, token_labels={labels_ds.num_chunks}"
+    )
+    n_chunks = acts_ds.num_chunks
+
+    # DDP: partition chunks across ranks
+    rank_chunks = list(range(rank, n_chunks, world_size))
+    steps_per_epoch = len(rank_chunks)
+
+    if rank == 0:
+        logger.info(f"Chunks: {n_chunks} total, {steps_per_epoch} per rank, ~{steps_per_epoch * 39 * 256} tokens/epoch")
 
     # Probe — bilinear, no sqrtm
     probe = MultiHeadCovProbeV2(
@@ -131,53 +106,52 @@ def train(
     if distributed:
         probe = DistributedDataParallel(probe, device_ids=[rank])
 
+    # Output
+    out_dir = activations / name
     if rank == 0:
+        out_dir.mkdir(parents=True, exist_ok=True)
         wandb.init(project="gfm-probes", name=name, config={
             "training": "token_level",
             "d_model": d_model, "d_hidden": d_hidden, "d_probe": d_probe,
             "lr": lr, "epochs": epochs, "batch_size": batch_size,
             "focal_gamma": focal_gamma, "n_heads": n_heads, "n_sqrtm_iters": 0,
         })
-        logger.info(f"Train: {iterator.steps_per_epoch} steps/epoch, ~{iterator.steps_per_epoch * per_gpu * 256} tokens/epoch")
+
+    if distributed:
+        dist.barrier()
 
     # Train
     for epoch in range(epochs):
         probe.train()
-        pbar = tqdm(iterator.iter_epoch(), total=iterator.steps_per_epoch,
-                    desc=f"Epoch {epoch+1}/{epochs}", disable=rank != 0)
 
-        for batch in pbar:
-            B = batch.acts.shape[0]
-            raw = batch.acts.float()  # [B, 6291456]
+        # Shuffle chunk order per epoch
+        g = torch.Generator().manual_seed(seed + epoch)
+        perm = torch.randperm(len(rank_chunks), generator=g)
+        epoch_chunks = [rank_chunks[i] for i in perm]
 
-            # Unpack: [B, 2, 3, 256, 4096] → ref view [B, 2, 256, 4096]
+        pbar = tqdm(epoch_chunks, desc=f"Epoch {epoch+1}/{epochs}", disable=rank != 0)
+
+        for chunk_id in pbar:
+            acts_chunk = acts_ds.load_chunk(chunk_id)
+            labels_chunk = labels_ds.load_chunk(chunk_id)
+
+            B = acts_chunk.acts.shape[0]
+            raw = acts_chunk.acts.float().to(device, non_blocking=True)
+
+            # Unpack ref view: [B, 2, 3, 256, 4096] → fwd+bwd ref → [B, 256, 8192]
             acts = raw.reshape(B, 2, 3, 256, 4096)
             fwd_ref = acts[:, 0, 1]  # [B, 256, 4096]
             bwd_ref = acts[:, 1, 1]  # [B, 256, 4096]
             token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192]
 
-            # Resolve labels: [B, 256, n_heads]
-            labels = np.full((B, 256, n_heads), np.nan, dtype=np.float32)
-            for b in range(B):
-                sid = batch.sequence_ids[b]
-                positions = pos_dict.get(sid)
-                if positions is None:
-                    continue
-                chrom = sid.split(":")[0]
-                pos_idx = lookup._pos_to_idx.get(chrom)
-                chrom_cols = lookup._labels.get(chrom)
-                if pos_idx is None or chrom_cols is None:
-                    continue
-                fwd_pos = positions[0]  # [256] genomic positions
-                for t in range(256):
-                    row = pos_idx.get(int(fwd_pos[t].item()), -1)
-                    if row >= 0:
-                        for h in range(n_heads):
-                            labels[b, t, h] = float(chrom_cols[h][row])
+            # Labels: [B, n_heads, 256] → transpose to [B, 256, n_heads]
+            labels = labels_chunk.acts.float().to(device, non_blocking=True)
+            labels = labels.permute(0, 2, 1)  # [B, 256, n_heads]
 
-            # Flatten: [B*256, 8192] acts, [B*256, n_heads] labels
-            flat_acts = token_acts.reshape(B * 256, 1, d_model)  # [B*256, 1, 8192] for probe
-            flat_labels = torch.from_numpy(labels.reshape(B * 256, n_heads)).to(device, non_blocking=True)
+            # Flatten to per-token: [B*256, 1, 8192] acts, [B*256, n_heads] labels
+            n_tokens = B * 256
+            flat_acts = token_acts.reshape(n_tokens, 1, d_model)
+            flat_labels = labels.reshape(n_tokens, n_heads)
 
             # Forward + loss
             logits = probe(flat_acts)
