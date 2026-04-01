@@ -26,6 +26,7 @@ dependencies = [
     "starlette>=0.45",
     "uvicorn[standard]",
     "duckdb>=1.2",
+    "pyarrow>=23.0.1",
 ]
 
 [project.scripts]

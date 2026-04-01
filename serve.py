@@ -1,8 +1,8 @@
 """DuckDB-backed API server for the variant viewer.
 
-Serves variant data, search, global config, UMAP, and on-demand Claude
-interpretation from a single DuckDB file. Also serves the Svelte frontend
-from frontend/dist/ if present.
+Returns flat rows from DuckDB as-is. The frontend derives structure
+(disruption/effect/gt grouping, attribution, z-scores) from column
+naming conventions + heads.json.
 
 Usage:
     ANTHROPIC_API_KEY=... uv run vv serve [--db builds/variants.duckdb] [--port 8501]
@@ -10,6 +10,7 @@ Usage:
 
 import asyncio
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -20,11 +21,45 @@ from loguru import logger
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from db import row_to_interpretation, row_to_variant
 from prompts import SYSTEM_PROMPT, build_prompt
+
+
+def _flat_to_prompt_dict(flat: dict, heads_config: dict) -> dict:
+    """Minimal adapter: flat DB row → dict that build_prompt() expects.
+
+    build_prompt needs: id, gene, score, consequence, substitution, hgvsc, hgvsp,
+    disruption {head: [ref, var]}, effect {head: float}, neighbors [...].
+    """
+    heads = heads_config.get("heads", {})
+    disruption = {}
+    effect = {}
+    for h, info in heads.items():
+        if info.get("category") == "disruption":
+            ref = flat.get(f"ref_score_{h}")
+            var = flat.get(f"var_score_{h}")
+            if ref is not None:
+                disruption[h] = [ref, var if var is not None else ref]
+        else:
+            val = flat.get(f"score_{h}")
+            if val is not None:
+                effect[h] = val
+
+    return {
+        "id": flat.get("variant_id", ""),
+        "gene": flat.get("gene_name", ""),
+        "score": flat.get("score_pathogenic", 0),
+        "consequence": flat.get("consequence", ""),
+        "substitution": flat.get("substitution", ""),
+        "hgvsc": flat.get("vep_hgvsc", ""),
+        "hgvsp": flat.get("vep_hgvsp", ""),
+        "label": flat.get("label", ""),
+        "disruption": disruption,
+        "effect": effect,
+        "neighbors": json.loads(flat["neighbors"]) if "neighbors" in flat and isinstance(flat["neighbors"], str) else [],
+    }
 
 # Load .env if present (for ANTHROPIC_API_KEY)
 _env = Path(__file__).parent / ".env"
@@ -39,54 +74,32 @@ if _env.exists():
 
 
 async def global_endpoint(request):
-    """GET /api/global — app config (distributions, heads, display, eval, etc.)."""
+    """GET /api/global — heads, distributions, umap, and metadata."""
     cur = request.app.state.db.cursor()
     rows = cur.execute("SELECT key, value FROM global_config").fetchall()
     result = {}
     for key, value in rows:
-        if key == "umap_gene_list":
-            continue  # served via /api/umap
         result[key] = json.loads(value)
     return JSONResponse(result)
 
 
-async def umap_endpoint(request):
-    """GET /api/umap — UMAP scatter data."""
-    cur = request.app.state.db.cursor()
-
-    count = cur.execute("SELECT COUNT(*) FROM umap").fetchone()[0]
-    if count == 0:
-        return JSONResponse(None)
-
-    rows = cur.execute(
-        "SELECT x, y, score, variant_id, gene_idx, label_idx FROM umap ORDER BY idx"
-    ).fetchall()
-
-    gene_list_row = cur.execute(
-        "SELECT value FROM global_config WHERE key = 'umap_gene_list'"
-    ).fetchone()
-    gene_list = json.loads(gene_list_row[0]) if gene_list_row else []
-
-    return JSONResponse({
-        "x": [r[0] for r in rows],
-        "y": [r[1] for r in rows],
-        "score": [r[2] for r in rows],
-        "ids": [r[3] for r in rows],
-        "genes": [r[4] for r in rows],
-        "labels": [r[5] for r in rows],
-        "gene_list": gene_list,
-    })
-
-
 async def variant_endpoint(request):
-    """GET /api/variants/{id} — single variant lookup."""
+    """GET /api/variants/{id} — flat row, no reconstruction."""
     vid = request.path_params["variant_id"]
     cur = request.app.state.db.cursor()
     row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
-    return JSONResponse(row_to_variant(row, columns))
+    # Return flat dict, skip nulls and NaN floats
+    result = {}
+    for col, val in zip(columns, row):
+        if val is None:
+            continue
+        if isinstance(val, float) and math.isnan(val):
+            continue
+        result[col] = val
+    return JSONResponse(result)
 
 
 async def search_endpoint(request):
@@ -99,17 +112,17 @@ async def search_endpoint(request):
 
     # Exact gene match first
     results = cur.execute(
-        "SELECT variant_id, label, score, consequence FROM variants "
-        "WHERE upper(gene) = ? ORDER BY score DESC LIMIT 30",
+        "SELECT variant_id, label, score_pathogenic, consequence FROM variants "
+        "WHERE upper(gene_name) = ? ORDER BY score_pathogenic DESC LIMIT 30",
         [q],
     ).fetchall()
 
     # Prefix match if we need more
     if len(results) < 30:
         prefix_results = cur.execute(
-            "SELECT variant_id, label, score, consequence FROM variants "
-            "WHERE upper(gene) LIKE ? AND upper(gene) != ? "
-            "ORDER BY score DESC LIMIT ?",
+            "SELECT variant_id, label, score_pathogenic, consequence FROM variants "
+            "WHERE upper(gene_name) LIKE ? AND upper(gene_name) != ? "
+            "ORDER BY score_pathogenic DESC LIMIT ?",
             [f"{q}%", q, 30 - len(results)],
         ).fetchall()
         results.extend(prefix_results)
@@ -121,7 +134,13 @@ async def search_endpoint(request):
 
 # ── Interpretation ────────────────────────────────────────────────────
 
-_interpret_lock = asyncio.Lock()
+_variant_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_lock(vid: str) -> asyncio.Lock:
+    if vid not in _variant_locks:
+        _variant_locks[vid] = asyncio.Lock()
+    return _variant_locks[vid]
 
 
 async def interpret_endpoint(request):
@@ -129,7 +148,7 @@ async def interpret_endpoint(request):
     vid = request.path_params["variant_id"]
     db_path = request.app.state.db_path
 
-    # 1. Check cache (read-only connection)
+    # 1. Check cache
     cur = request.app.state.db.cursor()
     cached = cur.execute(
         "SELECT variant_id, summary, mechanism, confidence, key_evidence, model, generated_at "
@@ -137,33 +156,43 @@ async def interpret_endpoint(request):
         [vid],
     ).fetchone()
     if cached:
-        columns = [desc[0] for desc in cur.description]
-        return JSONResponse(row_to_interpretation(cached, columns))
+        cols = [desc[0] for desc in cur.description]
+        result = {"status": "ok"}
+        for col, val in zip(cols, cached):
+            result[col] = json.loads(val) if col == "key_evidence" else val
+        return JSONResponse(result)
 
     # 2. Check API key
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return JSONResponse({"status": "unavailable", "error": "ANTHROPIC_API_KEY not set"}, status_code=503)
 
-    # 3. Load variant
+    # 3. Load variant (flat row → adapt for prompt builder)
     row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"status": "not_found", "error": f"Variant {vid} not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
-    variant = row_to_variant(row, columns)
+    flat = {col: val for col, val in zip(columns, row) if val is not None}
+    variant = _flat_to_prompt_dict(flat, request.app.state.head_config)
 
-    # 4. Generate interpretation (with lock to prevent duplicates)
-    async with _interpret_lock:
+    # 4. Generate interpretation (per-variant lock prevents duplicates)
+    async with _get_lock(vid):
         # Re-check cache under lock
         with duckdb.connect(str(db_path), read_only=True) as check_conn:
             cached = check_conn.execute(
-                "SELECT variant_id, summary, mechanism, confidence, key_evidence, model, generated_at "
-                "FROM interpretations WHERE variant_id = ?",
-                [vid],
+                "SELECT variant_id FROM interpretations WHERE variant_id = ?", [vid]
             ).fetchone()
             if cached:
-                columns = [desc[0] for desc in check_conn.cursor().description]
-                return JSONResponse(row_to_interpretation(cached, ["variant_id", "summary", "mechanism", "confidence", "key_evidence", "model", "generated_at"]))
+                # Re-fetch the full interpretation
+                full = check_conn.execute(
+                    "SELECT variant_id, summary, mechanism, confidence, key_evidence, model, generated_at "
+                    "FROM interpretations WHERE variant_id = ?", [vid]
+                ).fetchone()
+                cols = ["variant_id", "summary", "mechanism", "confidence", "key_evidence", "model", "generated_at"]
+                result = {"status": "ok"}
+                for col, val in zip(cols, full):
+                    result[col] = json.loads(val) if col == "key_evidence" else val
+                return JSONResponse(result)
 
         try:
             import anthropic
@@ -232,7 +261,6 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
     """Create the Starlette app with DuckDB-backed API endpoints."""
     routes = [
         Route("/api/global", global_endpoint),
-        Route("/api/umap", umap_endpoint),
         Route("/api/variants/search", search_endpoint),
         Route("/api/interpret/{variant_id:path}", interpret_endpoint),
         Route("/api/variants/{variant_id:path}", variant_endpoint),
@@ -251,4 +279,9 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
     app = Starlette(routes=routes, middleware=middleware)
     app.state.db = duckdb.connect(str(db_path), read_only=True)
     app.state.db_path = db_path
+
+    # Load heads config for the interpret endpoint's prompt builder
+    heads_row = app.state.db.execute("SELECT value FROM global_config WHERE key = 'heads'").fetchone()
+    app.state.head_config = json.loads(heads_row[0]) if heads_row else {"_meta": {}, "heads": {}}
+
     return app

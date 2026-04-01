@@ -1,0 +1,1528 @@
+{
+  "_meta": {
+    "description": "Head vocabulary for EVEE. Single source of truth for display names, grouping, curation rules, and predictor config. Consumed by the build step to produce heads.json for the frontend.",
+    "quality_thresholds": {
+      "min_auprc": 0.7,
+      "min_mcc": 0.3,
+      "min_spearman": 0.4,
+      "min_samples": 100
+    },
+    "removed_categories": [
+      "codon",
+      "trinuc",
+      "syn",
+      "gtex"
+    ],
+    "removed_exact": [
+      "gc_content"
+    ],
+    "tissue_specific_pattern": "^(chipseq|atacseq|chromhmm)_.*(?<!_breadth)(?<!_count)$",
+    "attribution_dedup": {
+      "chromhmm_states": [
+        "active_tss",
+        "bivalent",
+        "enhancer",
+        "heterochromatin",
+        "polycomb",
+        "quiescent",
+        "transcribed",
+        "weak_enhancer",
+        "weak_transcription"
+      ],
+      "description": "ChromHMM heads are deduplicated by state (e.g., chromhmm_{tissue}_{state} -> chromhmm_{state}). ChIP-seq by mark+type. ATAC-seq by type. fstack heads collapse to one group."
+    },
+    "curated_disruption_groups": [
+      "Protein",
+      "Structure",
+      "Regulatory",
+      "Domains",
+      "ELM Motifs",
+      "Amino Acid",
+      "PTM",
+      "Region"
+    ],
+    "curated_effect_groups": [
+      "Substitution",
+      "Variant Effects",
+      "Pfam Domains"
+    ],
+    "effect_group_tokens": {
+      "Substitution": [
+        "aa",
+        "blosum62",
+        "grantham",
+        "hydrophobicity",
+        "volume",
+        "mw"
+      ],
+      "Variant Effects": [
+        "splice",
+        "charge",
+        "consequence",
+        "impact",
+        "csq"
+      ],
+      "Pfam Domains": [
+        "pfam"
+      ]
+    },
+    "calibration": [
+      {
+        "lo": 0.0,
+        "hi": 0.1,
+        "pathogenic_rate": 1.8
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.3,
+        "pathogenic_rate": 15.6
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.5,
+        "pathogenic_rate": 44.4
+      },
+      {
+        "lo": 0.5,
+        "hi": 0.7,
+        "pathogenic_rate": 69.6
+      },
+      {
+        "lo": 0.7,
+        "hi": 0.9,
+        "pathogenic_rate": 88.1
+      },
+      {
+        "lo": 0.9,
+        "hi": 1.0,
+        "pathogenic_rate": 96.7
+      }
+    ],
+    "group_tokens": {
+      "Conservation": [
+        "phylop",
+        "phastcons",
+        "gerp"
+      ],
+      "Protein": [
+        "secondary",
+        "disorder",
+        "plddt",
+        "rsa",
+        "sasa",
+        "phi",
+        "psi",
+        "ppi",
+        "residue"
+      ],
+      "Structure": [
+        "in",
+        "is",
+        "has"
+      ],
+      "InterPro": [
+        "interpro"
+      ],
+      "Pfam": [
+        "pfam"
+      ],
+      "ELM": [
+        "elm"
+      ],
+      "ChIP-seq": [
+        "chipseq"
+      ],
+      "ATAC-seq": [
+        "atacseq"
+      ],
+      "Chromatin": [
+        "chromhmm",
+        "fstack"
+      ],
+      "Regulatory": [
+        "ccre",
+        "dna"
+      ],
+      "Amino Acid": [
+        "amino"
+      ],
+      "Sequence": [
+        "codon",
+        "trinuc",
+        "gc",
+        "cpg",
+        "syn"
+      ],
+      "Substitution": [
+        "aa",
+        "blosum62",
+        "grantham",
+        "hydrophobicity",
+        "volume",
+        "mw"
+      ],
+      "PTM": [
+        "ptm"
+      ],
+      "Expression": [
+        "gtex"
+      ],
+      "Region": [
+        "region",
+        "exon",
+        "n",
+        "trf",
+        "segdup",
+        "recomb"
+      ],
+      "Constraint": [
+        "loeuf"
+      ],
+      "Clinical": [
+        "cadd",
+        "revel",
+        "alphamissense",
+        "sift",
+        "polyphen",
+        "eve",
+        "bayesdel",
+        "clinpred",
+        "deogen2",
+        "mcap",
+        "metalr",
+        "mpc",
+        "mutpred",
+        "mvp",
+        "primateai",
+        "vest4",
+        "remm",
+        "regulomedb"
+      ],
+      "Splice": [
+        "spliceai"
+      ],
+      "Variant Effect": [
+        "splice",
+        "charge",
+        "consequence",
+        "impact",
+        "csq"
+      ],
+      "Population": [
+        "gnomad"
+      ],
+      "Pathogenicity": [
+        "pathogenic"
+      ]
+    },
+    "display_name_strip_prefixes": [
+      "interpro_",
+      "amino_acid_",
+      "chipseq_",
+      "atacseq_",
+      "chromhmm_",
+      "fstack_",
+      "pfam_",
+      "elm_",
+      "gtex_",
+      "ptm_",
+      "secondary_structure_",
+      "region_",
+      "dna_shape_"
+    ]
+  },
+  "heads": {
+    "aa_swap": {
+      "display": "AA Substitution",
+      "group": "Substitution",
+      "description": "The amino acid change caused by this variant"
+    },
+    "alphamissense_c": {
+      "display": "AlphaMissense",
+      "group": "Clinical",
+      "description": "AI-predicted pathogenicity score for missense variants",
+      "predictor": {
+        "order": 5,
+        "threshold": 0.564
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "atacseq_breadth": {
+      "group": "ATAC-seq",
+      "description": "ATAC-seq open chromatin across tissues"
+    },
+    "atacseq_k562_signal": {
+      "group": "ATAC-seq"
+    },
+    "atacseq_lung_peak": {
+      "group": "ATAC-seq"
+    },
+    "atacseq_tcell_peak": {
+      "group": "ATAC-seq"
+    },
+    "bayesdel_c": {
+      "display": "BayesDel",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "blosum62_c": {
+      "display": "BLOSUM62",
+      "group": "Substitution",
+      "description": "Evolutionary substitution score between amino acids"
+    },
+    "cadd_c": {
+      "display": "CADD",
+      "group": "Clinical",
+      "description": "Combined score predicting variant deleteriousness",
+      "predictor": {
+        "order": 4,
+        "threshold": 0.333
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "cadd_wg_c": {
+      "display": "CADD (whole-genome)",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "show_in_predictors_card": true
+    },
+    "charge_altering": {
+      "group": "Variant Effect",
+      "description": "Whether the substitution changes amino acid charge"
+    },
+    "chipseq_h3k27ac_breadth": {
+      "group": "ChIP-seq",
+      "description": "H3K27ac active enhancer/promoter mark across tissues"
+    },
+    "chipseq_h3k27ac_k562_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k27ac_tcell_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k27me3_breadth": {
+      "group": "ChIP-seq",
+      "description": "H3K27me3 Polycomb repressive mark across tissues"
+    },
+    "chipseq_h3k27me3_gm12878_signal": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k27me3_k562_signal": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_breadth": {
+      "group": "ChIP-seq",
+      "description": "H3K36me3 active transcription mark across tissues"
+    },
+    "chipseq_h3k36me3_fetal_brain_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_gm12878_signal": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_k562_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_k562_signal": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_monocyte_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_muscle_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k36me3_tcell_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me1_breadth": {
+      "group": "ChIP-seq",
+      "description": "H3K4me1 enhancer mark across tissues"
+    },
+    "chipseq_h3k4me3_breadth": {
+      "group": "ChIP-seq",
+      "description": "H3K4me3 active promoter mark across tissues"
+    },
+    "chipseq_h3k4me3_fetal_brain_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_gm12878_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_k562_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_liver_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_lung_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_monocyte_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_muscle_peak": {
+      "group": "ChIP-seq"
+    },
+    "chipseq_h3k4me3_tcell_peak": {
+      "group": "ChIP-seq"
+    },
+    "chromhmm_esc_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_esc_bivalent": {
+      "group": "Chromatin"
+    },
+    "chromhmm_esc_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_fetal_brain_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_fetal_brain_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_gm12878_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_gm12878_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_hippocampus_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_hippocampus_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_k562_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_k562_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_liver_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_lung_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_lung_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_monocyte_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_monocyte_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_muscle_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_muscle_transcribed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_tcell_active_tss": {
+      "group": "Chromatin"
+    },
+    "chromhmm_tcell_repressed": {
+      "group": "Chromatin"
+    },
+    "chromhmm_tcell_transcribed": {
+      "group": "Chromatin"
+    },
+    "clinpred_c": {
+      "display": "ClinPred",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "consequence": {
+      "group": "Variant Effect",
+      "description": "Molecular effect of the variant on the transcript"
+    },
+    "cpg_density": {
+      "group": "Sequence"
+    },
+    "csq_x_path": {
+      "group": "Variant Effect",
+      "description": "Csq domain × pathogenicity interaction."
+    },
+    "deogen2_c": {
+      "display": "DEOGEN2",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "disorder_content_fraction": {
+      "group": "Protein",
+      "description": "Proportion of the protein that is intrinsically disordered"
+    },
+    "eve_c": {
+      "display": "EVE",
+      "group": "Clinical",
+      "description": "Evolutionary model score for variant pathogenicity",
+      "predictor": {
+        "order": 9,
+        "threshold": 0.5
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "fstack_is_quiescent": {
+      "group": "Chromatin",
+      "description": "Chromatin state: region with no active histone marks across tissues"
+    },
+    "gc_content": {
+      "group": "Sequence"
+    },
+    "gerp_c": {
+      "display": "GERP",
+      "group": "Conservation",
+      "description": "Evolutionary conservation score at this genomic position",
+      "predictor": {
+        "order": 3,
+        "threshold": 0.5
+      },
+      "exclude_from_attribution": true,
+      "show_in_predictors_card": true
+    },
+    "gnomad_af_c": {
+      "display": "gnomAD AF",
+      "group": "Population",
+      "exclude_from_effect_expansion": true
+    },
+    "grantham_c": {
+      "group": "Substitution",
+      "description": "Physicochemical difference between substituted amino acids"
+    },
+    "gtex_brain_max_c": {
+      "display": "GTEx Brain Max",
+      "group": "Expression"
+    },
+    "gtex_max_tpm_c": {
+      "display": "GTEx Max TPM",
+      "group": "Expression"
+    },
+    "gtex_n_tissues_c": {
+      "display": "GTEx Tissues",
+      "group": "Expression"
+    },
+    "hydrophobicity_c": {
+      "group": "Substitution",
+      "description": "Change in amino acid hydrophobicity caused by substitution"
+    },
+    "impact": {
+      "group": "Variant Effect",
+      "description": "Predicted severity of the variant's functional effect"
+    },
+    "in_chain": {
+      "group": "Structure",
+      "description": "Whether the position falls within a protein chain"
+    },
+    "in_dna_binding": {
+      "group": "Structure",
+      "description": "Whether the position is in a DNA-binding region"
+    },
+    "in_interpro_domain": {
+      "group": "Structure",
+      "description": "Whether the position falls within an annotated protein domain"
+    },
+    "interpro_Fork_head_domain": {
+      "group": "InterPro",
+      "description": "Forkhead transcription factor DNA-binding domain"
+    },
+    "interpro_GPCR_rhodopsin_like_7TM": {
+      "group": "InterPro",
+      "description": "G protein-coupled receptor with seven transmembrane helices"
+    },
+    "interpro_Homedomain_like_superfamily": {
+      "group": "InterPro",
+      "description": "Homeodomain superfamily involved in DNA binding"
+    },
+    "interpro_Intermediate_filament_rod_domain": {
+      "group": "InterPro",
+      "description": "Structural rod domain of intermediate filament proteins"
+    },
+    "interpro_Krueppel_associated_box": {
+      "group": "InterPro",
+      "description": "Transcriptional repressor domain found in zinc finger proteins"
+    },
+    "interpro_Krueppel_associated_box_domain_superfamily": {
+      "group": "InterPro",
+      "description": "Superfamily of KRAB transcriptional repressor domains"
+    },
+    "interpro_Nebulin_repeat": {
+      "group": "InterPro",
+      "description": "Actin-binding repeat domain found in nebulin proteins"
+    },
+    "interpro_Olduvai_domain": {
+      "group": "InterPro",
+      "description": "Protein domain associated with human brain evolution"
+    },
+    "interpro_Olfactory_receptor": {
+      "group": "InterPro",
+      "description": "Receptor domain that detects odor molecules"
+    },
+    "interpro_Regulator_of_chromosome_condensation_RCC1": {
+      "group": "InterPro",
+      "description": "Domain regulating chromosome condensation and nuclear transport"
+    },
+    "interpro_Serine_proteases_trypsin_domain": {
+      "group": "InterPro",
+      "description": "Catalytic domain of trypsin-like serine proteases"
+    },
+    "interpro_Serine_threonine_tyrosine_protein_kinase_catalytic_domain": {
+      "group": "InterPro",
+      "description": "Catalytic domain of serine, threonine, and tyrosine kinases"
+    },
+    "interpro_Sushi_SCR_CCP_domain": {
+      "group": "InterPro",
+      "description": "Complement control protein domain involved in immune regulation"
+    },
+    "interpro_Tubulin": {
+      "group": "InterPro",
+      "description": "Tubulin domain forming cytoskeletal microtubules"
+    },
+    "interpro_Zinc_finger_C2H2_superfamily": {
+      "group": "InterPro",
+      "description": "Superfamily of C2H2 zinc finger DNA-binding proteins"
+    },
+    "interpro_Zinc_finger_C2H2_type": {
+      "group": "InterPro",
+      "description": "Classic C2H2-type zinc finger DNA-binding domain"
+    },
+    "is_alu": {
+      "group": "Structure",
+      "description": "Whether the position falls within an Alu repeat element"
+    },
+    "is_cpg_island": {
+      "group": "Structure",
+      "description": "Whether the position falls within a CpG island"
+    },
+    "is_disordered": {
+      "group": "Structure",
+      "description": "Whether the position is in an intrinsically disordered region"
+    },
+    "is_low_plddt": {
+      "group": "Structure",
+      "description": "Whether AlphaFold predicts low structural confidence here"
+    },
+    "is_polypyrimidine_tract": {
+      "group": "Structure",
+      "description": "Whether the position is in a polypyrimidine splicing tract"
+    },
+    "is_ppi_interface": {
+      "group": "Structure",
+      "description": "Whether the position is at a protein-protein interaction interface"
+    },
+    "is_ptc_region": {
+      "group": "Structure",
+      "description": "Whether variant could create a premature termination codon (PTC)"
+    },
+    "loeuf_c": {
+      "display": "LOEUF",
+      "group": "Constraint",
+      "show_in_predictors_card": true
+    },
+    "mcap_c": {
+      "display": "M-CAP",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "metalr_c": {
+      "display": "MetaLR",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "mpc_c": {
+      "display": "MPC",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "mutpred_c": {
+      "display": "MutPred",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "mvp_c": {
+      "display": "MVP",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "mw_c": {
+      "display": "Mol. Weight",
+      "group": "Substitution",
+      "description": "Change in molecular weight caused by amino acid substitution"
+    },
+    "pathogenic": {
+      "display": "Pathogenicity",
+      "group": "Pathogenicity",
+      "description": "Predicted probability of pathogenicity (the main output score)",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "pfam_PF00001": {
+      "group": "Pfam",
+      "description": "7-transmembrane receptor family involved in cell signaling"
+    },
+    "pfam_PF00001_x_path": {
+      "group": "Pfam",
+      "description": "PF00001 domain × pathogenicity interaction."
+    },
+    "pfam_PF00004": {
+      "group": "Pfam",
+      "description": "ATPase domain that unfolds or remodels proteins"
+    },
+    "pfam_PF00004_x_path": {
+      "group": "Pfam",
+      "description": "PF00004 domain × pathogenicity interaction."
+    },
+    "pfam_PF00005": {
+      "group": "Pfam",
+      "description": "ABC transporter domain that binds and hydrolyzes ATP"
+    },
+    "pfam_PF00005_x_path": {
+      "group": "Pfam",
+      "description": "PF00005 domain × pathogenicity interaction."
+    },
+    "pfam_PF00008": {
+      "group": "Pfam",
+      "description": "EGF-like domain involved in protein-protein interactions"
+    },
+    "pfam_PF00008_x_path": {
+      "group": "Pfam",
+      "description": "PF00008 domain × pathogenicity interaction."
+    },
+    "pfam_PF00017": {
+      "group": "Pfam",
+      "description": "SH2 domain that binds phosphotyrosine in signaling proteins"
+    },
+    "pfam_PF00017_x_path": {
+      "group": "Pfam",
+      "description": "PF00017 domain × pathogenicity interaction."
+    },
+    "pfam_PF00022": {
+      "group": "Pfam",
+      "description": "Actin domain forming cytoskeletal and contractile structures"
+    },
+    "pfam_PF00022_x_path": {
+      "group": "Pfam",
+      "description": "PF00022 domain × pathogenicity interaction."
+    },
+    "pfam_PF00028": {
+      "group": "Pfam",
+      "description": "Cadherin domain mediating calcium-dependent cell adhesion"
+    },
+    "pfam_PF00028_x_path": {
+      "group": "Pfam",
+      "description": "PF00028 domain × pathogenicity interaction."
+    },
+    "pfam_PF00029": {
+      "group": "Pfam",
+      "description": "Cytochrome c oxidase subunit involved in electron transport"
+    },
+    "pfam_PF00029_x_path": {
+      "group": "Pfam",
+      "description": "PF00029 domain × pathogenicity interaction."
+    },
+    "pfam_PF00038": {
+      "group": "Pfam",
+      "description": "Intermediate filament protein forming structural cytoskeleton"
+    },
+    "pfam_PF00038_x_path": {
+      "group": "Pfam",
+      "description": "PF00038 domain × pathogenicity interaction."
+    },
+    "pfam_PF00041": {
+      "group": "Pfam",
+      "description": "Fibronectin type III domain involved in cell adhesion"
+    },
+    "pfam_PF00041_x_path": {
+      "group": "Pfam",
+      "description": "PF00041 domain × pathogenicity interaction."
+    },
+    "pfam_PF00046": {
+      "group": "Pfam",
+      "description": "Homeodomain transcription factor binding DNA"
+    },
+    "pfam_PF00046_x_path": {
+      "group": "Pfam",
+      "description": "PF00046 domain × pathogenicity interaction."
+    },
+    "pfam_PF00053": {
+      "group": "Pfam",
+      "description": "Laminin EGF-like domain in extracellular matrix proteins"
+    },
+    "pfam_PF00053_x_path": {
+      "group": "Pfam",
+      "description": "PF00053 domain × pathogenicity interaction."
+    },
+    "pfam_PF00057": {
+      "group": "Pfam",
+      "description": "LDL receptor domain binding lipoproteins for uptake"
+    },
+    "pfam_PF00057_x_path": {
+      "group": "Pfam",
+      "description": "PF00057 domain × pathogenicity interaction."
+    },
+    "pfam_PF00058": {
+      "group": "Pfam",
+      "description": "Kazal-type serine protease inhibitor domain"
+    },
+    "pfam_PF00058_x_path": {
+      "group": "Pfam",
+      "description": "PF00058 domain × pathogenicity interaction."
+    },
+    "pfam_PF00063": {
+      "group": "Pfam",
+      "description": "Myosin head motor domain driving muscle contraction"
+    },
+    "pfam_PF00063_x_path": {
+      "group": "Pfam",
+      "description": "PF00063 domain × pathogenicity interaction."
+    },
+    "pfam_PF00067": {
+      "group": "Pfam",
+      "description": "Cytochrome P450 enzyme domain metabolizing diverse compounds"
+    },
+    "pfam_PF00067_x_path": {
+      "group": "Pfam",
+      "description": "PF00067 domain × pathogenicity interaction."
+    },
+    "pfam_PF00069": {
+      "group": "Pfam",
+      "description": "Protein kinase domain that phosphorylates target proteins"
+    },
+    "pfam_PF00069_x_path": {
+      "group": "Pfam",
+      "description": "PF00069 domain × pathogenicity interaction."
+    },
+    "pfam_PF00071": {
+      "group": "Pfam",
+      "description": "Ras GTPase domain regulating cell growth and signaling"
+    },
+    "pfam_PF00071_x_path": {
+      "group": "Pfam",
+      "description": "PF00071 domain × pathogenicity interaction."
+    },
+    "pfam_PF00079": {
+      "group": "Pfam",
+      "description": "Serpin domain inhibiting serine and cysteine proteases"
+    },
+    "pfam_PF00079_x_path": {
+      "group": "Pfam",
+      "description": "PF00079 domain × pathogenicity interaction."
+    },
+    "pfam_PF00083": {
+      "group": "Pfam",
+      "description": "Sugar transporter domain moving sugars across membranes"
+    },
+    "pfam_PF00083_x_path": {
+      "group": "Pfam",
+      "description": "PF00083 domain × pathogenicity interaction."
+    },
+    "pfam_PF00084": {
+      "group": "Pfam",
+      "description": "Sushi domain involved in complement and adhesion proteins"
+    },
+    "pfam_PF00084_x_path": {
+      "group": "Pfam",
+      "description": "PF00084 domain × pathogenicity interaction."
+    },
+    "pfam_PF00089": {
+      "group": "Pfam",
+      "description": "Trypsin-like serine protease domain cleaving proteins"
+    },
+    "pfam_PF00089_x_path": {
+      "group": "Pfam",
+      "description": "PF00089 domain × pathogenicity interaction."
+    },
+    "pfam_PF00091": {
+      "group": "Pfam",
+      "description": "Tubulin domain forming microtubule cytoskeleton"
+    },
+    "pfam_PF00091_x_path": {
+      "group": "Pfam",
+      "description": "PF00091 domain × pathogenicity interaction."
+    },
+    "pfam_PF00092": {
+      "group": "Pfam",
+      "description": "von Willebrand factor A domain mediating protein binding"
+    },
+    "pfam_PF00092_x_path": {
+      "group": "Pfam",
+      "description": "PF00092 domain × pathogenicity interaction."
+    },
+    "pfam_PF00096": {
+      "group": "Pfam",
+      "description": "Zinc finger C2H2 domain binding DNA in transcription factors"
+    },
+    "pfam_PF00096_x_path": {
+      "group": "Pfam",
+      "description": "PF00096 domain × pathogenicity interaction."
+    },
+    "pfam_PF00110": {
+      "group": "Pfam",
+      "description": "Cytochrome bc1 complex subunit in mitochondrial respiration"
+    },
+    "pfam_PF00110_x_path": {
+      "group": "Pfam",
+      "description": "PF00110 domain × pathogenicity interaction."
+    },
+    "pfam_PF00118": {
+      "group": "Pfam",
+      "description": "TCP-1 chaperonin domain assisting protein folding"
+    },
+    "pfam_PF00118_x_path": {
+      "group": "Pfam",
+      "description": "PF00118 domain × pathogenicity interaction."
+    },
+    "pfam_PF00122": {
+      "group": "Pfam",
+      "description": "E1-E2 ATPase domain pumping ions across membranes"
+    },
+    "pfam_PF00122_x_path": {
+      "group": "Pfam",
+      "description": "PF00122 domain × pathogenicity interaction."
+    },
+    "pfam_PF00136": {
+      "group": "Pfam",
+      "description": "DNA polymerase beta domain repairing DNA breaks"
+    },
+    "pfam_PF00136_x_path": {
+      "group": "Pfam",
+      "description": "PF00136 domain × pathogenicity interaction."
+    },
+    "pfam_PF00149": {
+      "group": "Pfam",
+      "description": "Metallophosphoesterase domain cleaving phosphate groups"
+    },
+    "pfam_PF00149_x_path": {
+      "group": "Pfam",
+      "description": "PF00149 domain × pathogenicity interaction."
+    },
+    "pfam_PF00153": {
+      "group": "Pfam",
+      "description": "Mitochondrial carrier domain transporting metabolites across membranes"
+    },
+    "pfam_PF00153_x_path": {
+      "group": "Pfam",
+      "description": "PF00153 domain × pathogenicity interaction."
+    },
+    "pfam_PF00171": {
+      "group": "Pfam",
+      "description": "Aldehyde dehydrogenase domain oxidizing aldehydes"
+    },
+    "pfam_PF00171_x_path": {
+      "group": "Pfam",
+      "description": "PF00171 domain × pathogenicity interaction."
+    },
+    "pfam_PF00176": {
+      "group": "Pfam",
+      "description": "SNF2 helicase domain remodeling chromatin structure"
+    },
+    "pfam_PF00176_x_path": {
+      "group": "Pfam",
+      "description": "PF00176 domain × pathogenicity interaction."
+    },
+    "pfam_PF00206": {
+      "group": "Pfam",
+      "description": "Lyase domain catalyzing bond cleavage without hydrolysis"
+    },
+    "pfam_PF00206_x_path": {
+      "group": "Pfam",
+      "description": "PF00206 domain × pathogenicity interaction."
+    },
+    "pfam_PF00209": {
+      "group": "Pfam",
+      "description": "Neurotransmitter-gated ion channel domain mediating fast signaling"
+    },
+    "pfam_PF00209_x_path": {
+      "group": "Pfam",
+      "description": "PF00209 domain × pathogenicity interaction."
+    },
+    "pfam_PF00225": {
+      "group": "Pfam",
+      "description": "Kinesin motor domain moving cargo along microtubules"
+    },
+    "pfam_PF00225_x_path": {
+      "group": "Pfam",
+      "description": "PF00225 domain × pathogenicity interaction."
+    },
+    "pfam_PF00245": {
+      "group": "Pfam",
+      "description": "Alkaline phosphatase domain removing phosphate groups"
+    },
+    "pfam_PF00245_x_path": {
+      "group": "Pfam",
+      "description": "PF00245 domain × pathogenicity interaction."
+    },
+    "pfam_PF00266": {
+      "group": "Pfam",
+      "description": "Aminotransferase class V domain transferring amino groups"
+    },
+    "pfam_PF00266_x_path": {
+      "group": "Pfam",
+      "description": "PF00266 domain × pathogenicity interaction."
+    },
+    "pfam_PF00270": {
+      "group": "Pfam",
+      "description": "DEAD-box helicase domain unwinding RNA structures"
+    },
+    "pfam_PF00270_x_path": {
+      "group": "Pfam",
+      "description": "PF00270 domain × pathogenicity interaction."
+    },
+    "pfam_PF00271": {
+      "group": "Pfam",
+      "description": "Helicase conserved C-terminal domain supporting RNA unwinding"
+    },
+    "pfam_PF00271_x_path": {
+      "group": "Pfam",
+      "description": "PF00271 domain × pathogenicity interaction."
+    },
+    "pfam_PF00343": {
+      "group": "Pfam",
+      "description": "Carbohydrate-binding module found in sugar-degrading enzymes"
+    },
+    "pfam_PF00343_x_path": {
+      "group": "Pfam",
+      "description": "PF00343 domain × pathogenicity interaction."
+    },
+    "pfam_PF00400": {
+      "group": "Pfam",
+      "description": "WD40 repeat domain involved in protein-protein interactions"
+    },
+    "pfam_PF00400_x_path": {
+      "group": "Pfam",
+      "description": "PF00400 domain × pathogenicity interaction."
+    },
+    "pfam_PF00412": {
+      "group": "Pfam",
+      "description": "LIM domain binding zinc fingers in cytoskeletal proteins"
+    },
+    "pfam_PF00412_x_path": {
+      "group": "Pfam",
+      "description": "PF00412 domain × pathogenicity interaction."
+    },
+    "pfam_PF00435": {
+      "group": "Pfam",
+      "description": "Spectrin repeat domain found in cytoskeletal scaffold proteins"
+    },
+    "pfam_PF00435_x_path": {
+      "group": "Pfam",
+      "description": "PF00435 domain × pathogenicity interaction."
+    },
+    "pfam_PF00441": {
+      "group": "Pfam",
+      "description": "Acyl-CoA dehydrogenase domain for fatty acid oxidation"
+    },
+    "pfam_PF00441_x_path": {
+      "group": "Pfam",
+      "description": "PF00441 domain × pathogenicity interaction."
+    },
+    "pfam_PF00501": {
+      "group": "Pfam",
+      "description": "AMP-binding domain in adenylation and ligase enzymes"
+    },
+    "pfam_PF00501_x_path": {
+      "group": "Pfam",
+      "description": "PF00501 domain × pathogenicity interaction."
+    },
+    "pfam_PF00520": {
+      "group": "Pfam",
+      "description": "Ion transport domain found in channel-forming proteins"
+    },
+    "pfam_PF00520_x_path": {
+      "group": "Pfam",
+      "description": "PF00520 domain × pathogenicity interaction."
+    },
+    "pfam_PF00630": {
+      "group": "Pfam",
+      "description": "Filamin repeat domain mediating actin-binding scaffold interactions"
+    },
+    "pfam_PF00630_x_path": {
+      "group": "Pfam",
+      "description": "PF00630 domain × pathogenicity interaction."
+    },
+    "pfam_PF00651": {
+      "group": "Pfam",
+      "description": "BTB/POZ domain mediating protein dimerization and interactions"
+    },
+    "pfam_PF00651_x_path": {
+      "group": "Pfam",
+      "description": "PF00651 domain × pathogenicity interaction."
+    },
+    "pfam_PF00654": {
+      "group": "Pfam",
+      "description": "Voltage-gated ion channel transmembrane domain"
+    },
+    "pfam_PF00654_x_path": {
+      "group": "Pfam",
+      "description": "PF00654 domain × pathogenicity interaction."
+    },
+    "pfam_PF00664": {
+      "group": "Pfam",
+      "description": "ABC transporter transmembrane domain for substrate transport"
+    },
+    "pfam_PF00664_x_path": {
+      "group": "Pfam",
+      "description": "PF00664 domain × pathogenicity interaction."
+    },
+    "pfam_PF00688": {
+      "group": "Pfam",
+      "description": "TGF-beta propeptide domain in growth factor precursors"
+    },
+    "pfam_PF00688_x_path": {
+      "group": "Pfam",
+      "description": "PF00688 domain × pathogenicity interaction."
+    },
+    "pfam_PF00755": {
+      "group": "Pfam",
+      "description": "Chymotrypsin-like serine protease propeptide domain"
+    },
+    "pfam_PF00755_x_path": {
+      "group": "Pfam",
+      "description": "PF00755 domain × pathogenicity interaction."
+    },
+    "pfam_PF00870": {
+      "group": "Pfam",
+      "description": "P53-like transcription factor DNA-binding domain"
+    },
+    "pfam_PF00870_x_path": {
+      "group": "Pfam",
+      "description": "PF00870 domain × pathogenicity interaction."
+    },
+    "pfam_PF00884": {
+      "group": "Pfam",
+      "description": "Sulfatase domain catalyzing sulfate ester hydrolysis"
+    },
+    "pfam_PF00884_x_path": {
+      "group": "Pfam",
+      "description": "PF00884 domain × pathogenicity interaction."
+    },
+    "pfam_PF00916": {
+      "group": "Pfam",
+      "description": "Sulfate transporter domain for inorganic sulfate transport"
+    },
+    "pfam_PF00916_x_path": {
+      "group": "Pfam",
+      "description": "PF00916 domain × pathogenicity interaction."
+    },
+    "pfam_PF00995": {
+      "group": "Pfam",
+      "description": "Sec1/Munc18 domain regulating vesicle membrane fusion"
+    },
+    "pfam_PF00995_x_path": {
+      "group": "Pfam",
+      "description": "PF00995 domain × pathogenicity interaction."
+    },
+    "pfam_PF01039": {
+      "group": "Pfam",
+      "description": "Carboxyl transferase domain in biotin-dependent carboxylases"
+    },
+    "pfam_PF01039_x_path": {
+      "group": "Pfam",
+      "description": "PF01039 domain × pathogenicity interaction."
+    },
+    "pfam_PF01055": {
+      "group": "Pfam",
+      "description": "Glycoside hydrolase family 31 sugar-cleaving enzyme domain"
+    },
+    "pfam_PF01055_x_path": {
+      "group": "Pfam",
+      "description": "PF01055 domain × pathogenicity interaction."
+    },
+    "pfam_PF01094": {
+      "group": "Pfam",
+      "description": "Receptor L domain found in extracellular receptor regions"
+    },
+    "pfam_PF01094_x_path": {
+      "group": "Pfam",
+      "description": "PF01094 domain × pathogenicity interaction."
+    },
+    "pfam_PF01347": {
+      "group": "Pfam",
+      "description": "Lipocalin domain binding and transporting small hydrophobic molecules"
+    },
+    "pfam_PF01347_x_path": {
+      "group": "Pfam",
+      "description": "PF01347 domain × pathogenicity interaction."
+    },
+    "pfam_PF01391": {
+      "group": "Pfam",
+      "description": "Collagen triple helix repeat structural extracellular matrix domain"
+    },
+    "pfam_PF01391_x_path": {
+      "group": "Pfam",
+      "description": "PF01391 domain × pathogenicity interaction."
+    },
+    "pfam_PF01410": {
+      "group": "Pfam",
+      "description": "CRAL-TRIO lipid-binding domain for small molecule transport"
+    },
+    "pfam_PF01410_x_path": {
+      "group": "Pfam",
+      "description": "PF01410 domain × pathogenicity interaction."
+    },
+    "pfam_PF01496": {
+      "group": "Pfam",
+      "description": "V-type ATPase subunit domain for proton pumping"
+    },
+    "pfam_PF01496_x_path": {
+      "group": "Pfam",
+      "description": "PF01496 domain × pathogenicity interaction."
+    },
+    "pfam_PF01576": {
+      "group": "Pfam",
+      "description": "Myosin tail domain for motor protein dimerization"
+    },
+    "pfam_PF01576_x_path": {
+      "group": "Pfam",
+      "description": "PF01576 domain × pathogenicity interaction."
+    },
+    "pfam_PF01602": {
+      "group": "Pfam",
+      "description": "Adaptin N-terminal domain in vesicle coat complexes"
+    },
+    "pfam_PF01602_x_path": {
+      "group": "Pfam",
+      "description": "PF01602 domain × pathogenicity interaction."
+    },
+    "pfam_PF02463": {
+      "group": "Pfam",
+      "description": "SMC hinge domain in chromosome organization complexes"
+    },
+    "pfam_PF02463_x_path": {
+      "group": "Pfam",
+      "description": "PF02463 domain × pathogenicity interaction."
+    },
+    "pfam_PF02931": {
+      "group": "Pfam",
+      "description": "Neurotransmitter-gated ion channel ligand-binding domain"
+    },
+    "pfam_PF02931_x_path": {
+      "group": "Pfam",
+      "description": "PF02931 domain × pathogenicity interaction."
+    },
+    "pfam_PF02932": {
+      "group": "Pfam",
+      "description": "Neurotransmitter-gated ion channel transmembrane domain"
+    },
+    "pfam_PF02932_x_path": {
+      "group": "Pfam",
+      "description": "PF02932 domain × pathogenicity interaction."
+    },
+    "pfam_PF03542": {
+      "group": "Pfam",
+      "description": "Kelch-like domain mediating protein-protein interactions"
+    },
+    "pfam_PF03542_x_path": {
+      "group": "Pfam",
+      "description": "PF03542 domain × pathogenicity interaction."
+    },
+    "pfam_PF04388": {
+      "group": "Pfam",
+      "description": "Ubiquitin-associated domain binding ubiquitinated proteins"
+    },
+    "pfam_PF04388_x_path": {
+      "group": "Pfam",
+      "description": "PF04388 domain × pathogenicity interaction."
+    },
+    "pfam_PF07645": {
+      "group": "Pfam",
+      "description": "Calcium-binding EGF-like domain in extracellular proteins"
+    },
+    "pfam_PF07645_x_path": {
+      "group": "Pfam",
+      "description": "PF07645 domain × pathogenicity interaction."
+    },
+    "pfam_PF07679": {
+      "group": "Pfam",
+      "description": "Immunoglobulin I-set domain found in cell adhesion proteins"
+    },
+    "pfam_PF07679_x_path": {
+      "group": "Pfam",
+      "description": "PF07679 domain × pathogenicity interaction."
+    },
+    "pfam_PF07686": {
+      "group": "Pfam",
+      "description": "Immunoglobulin V-set domain in antibodies and receptors"
+    },
+    "pfam_PF07686_x_path": {
+      "group": "Pfam",
+      "description": "PF07686 domain × pathogenicity interaction."
+    },
+    "pfam_PF07690": {
+      "group": "Pfam",
+      "description": "Major facilitator superfamily transporter domain"
+    },
+    "pfam_PF07690_x_path": {
+      "group": "Pfam",
+      "description": "PF07690 domain × pathogenicity interaction."
+    },
+    "pfam_PF07714": {
+      "group": "Pfam",
+      "description": "Protein tyrosine kinase catalytic domain"
+    },
+    "pfam_PF07714_x_path": {
+      "group": "Pfam",
+      "description": "PF07714 domain × pathogenicity interaction."
+    },
+    "pfam_PF08423": {
+      "group": "Pfam",
+      "description": "Rad51 domain involved in DNA recombination and repair"
+    },
+    "pfam_PF08423_x_path": {
+      "group": "Pfam",
+      "description": "PF08423 domain × pathogenicity interaction."
+    },
+    "pfam_PF11864": {
+      "group": "Pfam",
+      "description": "Dynamin GTPase effector domain for membrane remodeling"
+    },
+    "pfam_PF11864_x_path": {
+      "group": "Pfam",
+      "description": "PF11864 domain × pathogenicity interaction."
+    },
+    "pfam_PF12796": {
+      "group": "Pfam",
+      "description": "Ankyrin repeat domain mediating protein-protein interactions"
+    },
+    "pfam_PF12796_x_path": {
+      "group": "Pfam",
+      "description": "PF12796 domain × pathogenicity interaction."
+    },
+    "pfam_PF13853": {
+      "group": "Pfam",
+      "description": "PH-like domain involved in membrane lipid binding"
+    },
+    "pfam_PF13853_x_path": {
+      "group": "Pfam",
+      "description": "PF13853 domain × pathogenicity interaction."
+    },
+    "pfam_PF13927": {
+      "group": "Pfam",
+      "description": "Immunoglobulin-like domain involved in protein binding interactions"
+    },
+    "pfam_PF13927_x_path": {
+      "group": "Pfam",
+      "description": "PF13927 domain × pathogenicity interaction."
+    },
+    "pfam_PF16499": {
+      "group": "Pfam",
+      "description": "Neurexin-like domain involved in synaptic cell adhesion"
+    },
+    "pfam_PF16499_x_path": {
+      "group": "Pfam",
+      "description": "PF16499 domain × pathogenicity interaction."
+    },
+    "pfam_PF24681": {
+      "group": "Pfam",
+      "description": "Protein domain of currently limited functional characterization"
+    },
+    "pfam_PF24681_x_path": {
+      "group": "Pfam",
+      "description": "PF24681 domain × pathogenicity interaction."
+    },
+    "phastcons_100way": {
+      "display": "PhastCons 100-way",
+      "group": "Conservation",
+      "description": "Evolutionary conservation score across 100 vertebrate species",
+      "predictor": {
+        "order": 2,
+        "threshold": 0.5
+      },
+      "exclude_from_attribution": true,
+      "show_in_predictors_card": true
+    },
+    "phastcons_c": {
+      "display": "PhastCons",
+      "group": "Conservation",
+      "exclude_from_attribution": true
+    },
+    "phi": {
+      "display": "AF Phi Angle",
+      "group": "Protein"
+    },
+    "phylop_100way": {
+      "display": "PhyloP 100-way",
+      "group": "Conservation",
+      "description": "Per-site evolutionary conservation across 100 vertebrate species",
+      "predictor": {
+        "order": 1,
+        "threshold": 0.5
+      },
+      "exclude_from_attribution": true,
+      "show_in_predictors_card": true
+    },
+    "phylop_c": {
+      "display": "PhyloP",
+      "group": "Conservation",
+      "exclude_from_attribution": true
+    },
+    "plddt": {
+      "display": "AF Confidence (pLDDT)",
+      "group": "Protein",
+      "description": "AlphaFold's confidence in predicted local protein structure"
+    },
+    "polyphen_c": {
+      "display": "PolyPhen-2",
+      "group": "Clinical",
+      "description": "Predicted functional impact of amino acid substitution",
+      "predictor": {
+        "order": 8,
+        "threshold": 0.85
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "primateai_c": {
+      "display": "PrimateAI",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "psi": {
+      "display": "AF Psi Angle",
+      "group": "Protein",
+      "description": "Protein backbone psi dihedral angle from AlphaFold structure"
+    },
+    "ptm_glycosylation": {
+      "group": "PTM",
+      "description": "Known site of sugar molecule attachment to protein"
+    },
+    "ptm_phosphorylation": {
+      "group": "PTM",
+      "description": "Known site of phosphate group addition to protein"
+    },
+    "region_CDS": {
+      "group": "Region",
+      "description": "Variant falls within a protein-coding sequence region"
+    },
+    "region_intron": {
+      "group": "Region",
+      "description": "Variant falls within a non-coding intron region"
+    },
+    "regulomedb_c": {
+      "display": "RegulomeDB",
+      "group": "Clinical",
+      "show_in_predictors_card": true
+    },
+    "remm_c": {
+      "display": "ReMM",
+      "group": "Clinical",
+      "show_in_predictors_card": true
+    },
+    "revel_c": {
+      "display": "REVEL",
+      "group": "Clinical",
+      "description": "Ensemble score predicting pathogenicity of missense variants",
+      "predictor": {
+        "order": 6,
+        "threshold": 0.5
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "rsa": {
+      "display": "Solvent Accessibility",
+      "group": "Protein",
+      "description": "Proportion of amino acid surface exposed to solvent"
+    },
+    "sasa": {
+      "display": "Surface Area",
+      "group": "Protein",
+      "description": "Total solvent-accessible surface area of an amino acid"
+    },
+    "secondary_structure_H": {
+      "group": "Protein",
+      "description": "Whether the residue lies within an alpha helix"
+    },
+    "segdup_identity": {
+      "group": "Region",
+      "description": "Sequence similarity of overlapping segmental duplication regions"
+    },
+    "sift_c": {
+      "display": "SIFT",
+      "group": "Clinical",
+      "description": "Predicted effect of amino acid change on protein function",
+      "predictor": {
+        "order": 7,
+        "threshold": 0.05,
+        "invert": true,
+        "display": "1 − SIFT"
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "splice_disrupting": {
+      "group": "Variant Effect",
+      "description": "Whether the variant is predicted to disrupt splicing"
+    },
+    "spliceai_ag_c": {
+      "display": "SpliceAI AG",
+      "group": "Splice",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "spliceai_al_c": {
+      "display": "SpliceAI AL",
+      "group": "Splice",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "spliceai_dg_c": {
+      "display": "SpliceAI DG",
+      "group": "Splice",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "spliceai_dl_c": {
+      "display": "SpliceAI DL",
+      "group": "Splice",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "spliceai_max_c": {
+      "display": "SpliceAI",
+      "group": "Splice",
+      "description": "Deep learning prediction of variant impact on splicing",
+      "predictor": {
+        "order": 10,
+        "threshold": 0.2
+      },
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "syn_potential": {
+      "group": "Sequence"
+    },
+    "trf_copy_number": {
+      "group": "Region",
+      "description": "Number of repeated units in a tandem repeat region"
+    },
+    "trf_period": {
+      "group": "Region",
+      "description": "Length of the repeating unit in a tandem repeat"
+    },
+    "vest4_c": {
+      "display": "VEST4",
+      "group": "Clinical",
+      "exclude_from_attribution": true,
+      "exclude_from_effect_expansion": true
+    },
+    "volume_c": {
+      "group": "Substitution",
+      "description": "Amino acid side chain volume at this position"
+    }
+  }
+}
