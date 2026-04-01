@@ -85,8 +85,12 @@ def load_scores(probe: str) -> pl.DataFrame:
     return pl.concat(parts, how="diagonal") if len(parts) > 1 else parts[0]
 
 
-def join_and_clean(scores: pl.DataFrame, probe: str) -> tuple[pl.DataFrame, dict]:
-    """Join scores with variant metadata, rename gt columns, fill nulls."""
+def join_and_clean(scores: pl.DataFrame, probe: str) -> tuple[pl.DataFrame, dict, HeadClassification]:
+    """Join scores with variant metadata, rename gt columns, fill nulls.
+
+    Returns (df, cfg, hc) — head classification is computed once here and
+    threaded through the rest of the pipeline.
+    """
     variants = load_variants()
     heads = load_heads()
     cfg = json.loads((LABELED / probe / "config.json").read_text())
@@ -109,8 +113,10 @@ def join_and_clean(scores: pl.DataFrame, probe: str) -> tuple[pl.DataFrame, dict
     gt_renames = {h: f"gt_{h}" for h in heads if h in df.columns and h not in META_COLS}
     df = df.rename(gt_renames)
 
-    # Round scores, fill nulls in metadata
+    # Classify heads once
     hc = classify_heads(df, cfg)
+
+    # Round scores, fill nulls in metadata
     float_cols = [c for c in hc.ref_cols + hc.var_cols + hc.eff_cols + hc.gt_cols
                   if df[c].dtype in (pl.Float32, pl.Float64)]
 
@@ -125,7 +131,7 @@ def join_and_clean(scores: pl.DataFrame, probe: str) -> tuple[pl.DataFrame, dict
         pl.col("score_pathogenic").fill_null(0.0).round(4),
     )
 
-    return df, cfg
+    return df, cfg, hc
 
 
 # ── Aggregates ──────────────────────────────────────────────────────────
@@ -397,7 +403,6 @@ def main(
       5. Merge head_vocab + eval + stats → heads config
       6. Store aggregates + heads + umap in global_config
     """
-    import duckdb
     from db import create_db
 
     t0 = time.time()
@@ -416,13 +421,12 @@ def main(
     # 1. Load + join
     _t("Loading...")
     scores = load_scores(probe)
-    df, cfg = join_and_clean(scores, probe)
+    df, cfg, hc = join_and_clean(scores, probe)
     df_full = df
     if dev:
         df = df.head(dev)
         logger.info(f"Dev mode: {dev} variants")
 
-    hc = classify_heads(df, cfg)
     heads_meta = load_heads()
     _t(f"{df.height:,} variants, {len(hc.disruption_heads)} disruption + {len(hc.effect_heads)} effect heads")
 

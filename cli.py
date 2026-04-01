@@ -6,8 +6,8 @@ Usage:
     uv run vv extract --probe $P --acts $A       # submit SLURM extract (8 shards)
     uv run vv eval $ACTS/probe_v11               # compute per-head metrics → eval.json
     uv run vv log-eval $ACTS/probe_v11           # upload eval.json to wandb
-    uv run vv build                              # fast build to /tmp
-    uv run vv serve /tmp/variant_viewer_*        # serve with on-demand interpretation
+    uv run vv build                              # build DuckDB → builds/variants.duckdb
+    uv run vv serve                              # serve API + frontend on :8501
     uv run vv pipeline $ACTS/probe_v11           # full chain: extract → eval → build
 """
 

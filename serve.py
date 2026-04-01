@@ -21,7 +21,7 @@ from loguru import logger
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from prompts import SYSTEM_PROMPT, build_prompt
@@ -83,6 +83,15 @@ async def global_endpoint(request):
     return JSONResponse(result)
 
 
+async def umap_endpoint(request):
+    """GET /api/umap — UMAP scatter data (or null if not computed)."""
+    cur = request.app.state.db.cursor()
+    row = cur.execute("SELECT value FROM global_config WHERE key = 'umap'").fetchone()
+    if not row:
+        return JSONResponse(None)
+    return JSONResponse(json.loads(row[0]))
+
+
 async def variant_endpoint(request):
     """GET /api/variants/{id} — flat row, no reconstruction."""
     vid = request.path_params["variant_id"]
@@ -91,7 +100,6 @@ async def variant_endpoint(request):
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
-    # Return flat dict, skip nulls and NaN floats
     result = {}
     for col, val in zip(columns, row):
         if val is None:
@@ -177,22 +185,18 @@ async def interpret_endpoint(request):
 
     # 4. Generate interpretation (per-variant lock prevents duplicates)
     async with _get_lock(vid):
-        # Re-check cache under lock
-        with duckdb.connect(str(db_path), read_only=True) as check_conn:
-            cached = check_conn.execute(
-                "SELECT variant_id FROM interpretations WHERE variant_id = ?", [vid]
-            ).fetchone()
-            if cached:
-                # Re-fetch the full interpretation
-                full = check_conn.execute(
-                    "SELECT variant_id, summary, mechanism, confidence, key_evidence, model, generated_at "
-                    "FROM interpretations WHERE variant_id = ?", [vid]
-                ).fetchone()
-                cols = ["variant_id", "summary", "mechanism", "confidence", "key_evidence", "model", "generated_at"]
-                result = {"status": "ok"}
-                for col, val in zip(cols, full):
-                    result[col] = json.loads(val) if col == "key_evidence" else val
-                return JSONResponse(result)
+        # Re-check cache under lock (another request may have completed while we waited)
+        cached = cur.execute(
+            "SELECT variant_id, summary, mechanism, confidence, key_evidence, model, generated_at "
+            "FROM interpretations WHERE variant_id = ?",
+            [vid],
+        ).fetchone()
+        if cached:
+            cols = [desc[0] for desc in cur.description]
+            result = {"status": "ok"}
+            for col, val in zip(cols, cached):
+                result[col] = json.loads(val) if col == "key_evidence" else val
+            return JSONResponse(result)
 
         try:
             import anthropic
@@ -261,6 +265,7 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
     """Create the Starlette app with DuckDB-backed API endpoints."""
     routes = [
         Route("/api/global", global_endpoint),
+        Route("/api/umap", umap_endpoint),
         Route("/api/variants/search", search_endpoint),
         Route("/api/interpret/{variant_id:path}", interpret_endpoint),
         Route("/api/variants/{variant_id:path}", variant_endpoint),

@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { getVariant } from '../lib/api';
   import { globalData, currentVariant } from '../lib/stores';
-  import type { Variant, GlobalData } from '../lib/types';
+  import type { Variant } from '../lib/types';
   import VerdictCard from './cards/VerdictCard.svelte';
   import InterpretationCard from './cards/InterpretationCard.svelte';
   import DisruptionCard from './cards/DisruptionCard.svelte';
@@ -16,27 +15,23 @@
 
   let variant = $state<Variant | null>(null);
   let error = $state('');
-  let global = $state<GlobalData | null>(null);
-
-  const unsub = globalData.subscribe(g => { global = g; });
 
   async function load(id: string) {
     error = '';
     variant = null;
     try {
-      const v = await getVariant(id);
-      variant = v;
-      currentVariant.set(v);
+      variant = await getVariant(id);
+      currentVariant.set(variant);
     } catch {
       error = id;
     }
   }
 
-  $effect(() => {
-    load(variantId);
-  });
+  $effect(() => { load(variantId); });
 
-  onMount(() => unsub);
+  const hasPopulation = $derived(
+    variant?.gnomad_pop && Object.values(variant.gnomad_pop).some(f => f > 0)
+  );
 </script>
 
 {#if error}
@@ -44,18 +39,18 @@
     <div style="font-size:16px;font-weight:600;margin-bottom:4px">Variant not found</div>
     <div style="font-size:13px;font-family:monospace">{error}</div>
   </div>
-{:else if variant && global}
-  <VerdictCard {variant} {global} />
+{:else if variant && $globalData}
+  <VerdictCard {variant} global={$globalData} />
   <InterpretationCard variantId={variant.id} />
   {#if variant.attribution?.length}
-    <DisruptionCard {variant} {global} />
+    <DisruptionCard {variant} global={$globalData} />
   {/if}
-  <PredictorsCard {variant} {global} />
-  <NeighborsCard {variant} />
-  <DistributionCard {variant} distributions={global.distributions} />
-  {#if variant.gnomad_pop && Object.values(variant.gnomad_pop).some(f => f != null && f > 0)}
+  <PredictorsCard {variant} global={$globalData} />
+  {#if variant.neighbors?.length}
+    <NeighborsCard {variant} />
+  {/if}
+  <DistributionCard {variant} distributions={$globalData.distributions} />
+  {#if hasPopulation}
     <PopulationCard {variant} />
   {/if}
-{:else}
-  <div style="text-align:center;padding:60px 24px;color:var(--text-muted)">Loading...</div>
 {/if}
