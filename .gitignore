@@ -14,3 +14,6 @@ wandb/
 terraform/.terraform/
 terraform/modules/**/*.zip
 config.js
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/

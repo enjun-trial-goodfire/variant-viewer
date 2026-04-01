@@ -1,7 +1,7 @@
-"""Build variant viewer static site from probe scores.
+"""Build variant viewer DuckDB from probe scores.
 
-Writes per-variant JSONs + global.json + search.json to /tmp staging,
-then optionally rsyncs to the output path. See SCHEMA.md for the data contract.
+Computes neighbors, UMAP, attribution, histograms, then writes everything
+to a single DuckDB file. See SCHEMA.md for the data contract.
 
 Two score types:
   - **disruption**: ref_score/var_score from the ref-view probe. Shows what changed
@@ -10,13 +10,10 @@ Two score types:
     (clinical predictors, consequence, domain effects). Stored as scalars per head.
 
 Timings (H200, 232K variants, probe_v11):
-  Load 3s | GPU similarity 10s | Neighbors 3s | UMAP 40s | Write 70s | Total ~2min
+  Load 3s | GPU similarity 10s | Neighbors 3s | UMAP 40s | DB write <1s | Total ~1min
 """
 
 import json
-import shutil
-import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -34,7 +31,7 @@ from attribution import attribute
 from constants import EVAL_KEYS, LABEL_TO_IDX, PROBE_NAME
 from display import curated_effect_group, curated_group, display_name
 from loaders import load_heads, load_variants
-from paths import ARTIFACTS, HEADS, VARIANTS, sanitize_vid
+from paths import ARTIFACTS, HEADS, VARIANTS
 
 
 def resolve_domains(raw: str | None, domain_cache: dict[str, str]) -> list[dict] | None:
@@ -421,19 +418,12 @@ def _build_variant_dict(
     }
 
 
-def write_variants(
+def _prepare_variant_data(
     df: pl.DataFrame,
     cfg: dict,
-    nb_map: dict[str, list],
-    attr_by_vid: dict[str, list],
-    heads_meta: dict,
-    staging: Path,
-) -> int:
-    """Serialize per-variant JSONs to staging/variants/. Returns count written."""
+) -> tuple[dict, tuple, tuple, dict, dict, dict, dict, dict, dict]:
+    """Pre-extract columnar data for variant dict construction. Returns all lookup dicts."""
     ref_cols, var_cols, eff_cols, gt_cols, disruption_heads, effect_heads = _classify_heads(df, cfg)
-
-    staging_vdir = staging / "variants"
-    staging_vdir.mkdir(exist_ok=True)
 
     meta_fields = (
         "variant_id", "gene_name", "chrom", "pos", "ref", "alt",
@@ -450,7 +440,6 @@ def write_variants(
     eff_d = {h: col_data[c] for c, h in zip(eff_cols, effect_heads, strict=True)}
     gt_d = {c[3:]: col_data[c] for c in gt_cols}
 
-    # Pre-resolve optional column lookups (shared default avoids per-key allocation)
     n = df.height
     defaults = [None] * n
     vep_data = {
@@ -470,30 +459,15 @@ def write_variants(
                   "last_evaluated", "origin")
     }
 
-    for i in track(range(n), description="Writing variants..."):
-        data = _build_variant_dict(
-            i, col_data, disruption_heads, effect_heads,
-            ref_d, var_d, eff_d, gt_d,
-            vep_data, gnomad_pops, clinvar_data,
-            nb_map, attr_by_vid, heads_meta,
-        )
-        vid = col_data["variant_id"][i]
-        (staging_vdir / f"{sanitize_vid(vid)}.json").write_bytes(orjson.dumps(data))
-
-    return n
+    return col_data, disruption_heads, effect_heads, ref_d, var_d, eff_d, gt_d, vep_data, gnomad_pops, clinvar_data
 
 
-# ── Global + search + static files ─────────────────────────────────────
-
-
-def write_global(
+def _compute_global_data(
     df: pl.DataFrame,
     cfg: dict,
     heads_meta: dict,
-    umap_data: dict | None,
-    staging: Path,
-) -> None:
-    """Write global.json, search.json, and copy static files to staging."""
+) -> dict:
+    """Compute the global config data (distributions, eval, heads, display, etc.)."""
     ref_cols, var_cols, eff_cols, _, disruption_heads, effect_heads = _classify_heads(df, cfg)
     all_head_names = disruption_heads + effect_heads
 
@@ -501,18 +475,16 @@ def write_global(
     ben_mask = torch.from_numpy((df["label"] == "benign").to_numpy())
     path_mask = torch.from_numpy((df["label"] == "pathogenic").to_numpy())
 
-    # Disruption histograms use delta (var - ref), effect histograms use raw scores
     delta_exprs = [(pl.col(vc) - pl.col(rc)).alias(f"delta_{h}")
                    for rc, vc, h in zip(ref_cols, var_cols, disruption_heads)]
     delta_cols = [f"delta_{h}" for h in disruption_heads]
     df_hist = df.with_columns(delta_exprs)
     score_matrix = torch.from_numpy(
         df_hist.select(delta_cols + list(eff_cols)).to_numpy(allow_copy=True).T
-    ).float()  # (n_heads, n_variants)
+    ).float()
 
     n_disruption = len(disruption_heads)
 
-    # Per-head delta stats for percentile normalization (before remapping)
     head_stats = {}
     for j, h in enumerate(disruption_heads):
         vals = score_matrix[j]
@@ -523,13 +495,11 @@ def write_global(
                 "std": round(valid.std().item(), 5),
             }
 
-    # Ref-view score histograms for disruption heads (for dual histogram display)
     ref_matrix = torch.from_numpy(
         df.select(list(ref_cols)).to_numpy(allow_copy=True).T
-    ).float()  # (n_disruption, n_variants) — values in [0, 1]
+    ).float()
 
     def _adaptive_range(vals: torch.Tensor) -> tuple[float, float]:
-        """Compute adaptive bin range from 0.5th-99.5th percentile with 5% padding."""
         valid = vals[~vals.isnan()]
         if len(valid) < 10:
             return 0.0, 1.0
@@ -541,7 +511,6 @@ def write_global(
     hh = {}
     for j, head_name in enumerate(all_head_names):
         if j < n_disruption:
-            # Disruption head: adaptive ranges for both delta and ref
             raw_delta = score_matrix[j]
             d_lo, d_hi = _adaptive_range(raw_delta)
             raw_ref = ref_matrix[j]
@@ -559,7 +528,6 @@ def write_global(
                 },
             }
         else:
-            # Effect head: adaptive range
             raw_eff = score_matrix[j]
             e_lo, e_hi = _adaptive_range(raw_eff)
             hh[head_name] = {
@@ -578,9 +546,7 @@ def write_global(
                     break
 
     decomp_path = LABELED / PROBE / "score_decomposition.json"
-    if umap_data:
-        (staging / "umap.json").write_bytes(orjson.dumps(umap_data))
-    (staging / "global.json").write_bytes(orjson.dumps({
+    return {
         "distributions": {
             "pathogenic": {
                 "benign": prebin(scores_t[ben_mask], 80),
@@ -598,61 +564,113 @@ def write_global(
         "head_stats": head_stats,
         "descriptions": json.loads(Path("head_descriptions.json").read_text()) if Path("head_descriptions.json").exists() else {},
         "decomposition": json.loads(decomp_path.read_text()) if decomp_path.exists() else None,
-    }))
+    }
 
-    # ── search.json ──────────────────────────────────────────────────────
-    search_df = (df
-        .select("variant_id", "gene_name", "label", "score_pathogenic", "consequence")
-        .filter(pl.col("gene_name") != "?")
-        .sort("score_pathogenic", descending=True)
-        .with_columns(pl.col("gene_name").str.to_uppercase().alias("gene_upper")))
 
-    search_agg = search_df.group_by("gene_upper").agg(
-        pl.struct(
-            pl.col("variant_id").alias("v"),
-            pl.col("label").alias("l"),
-            pl.col("score_pathogenic").alias("s"),
-            pl.col("consequence").alias("c"),
-        ).alias("variants"))
+def write_db(
+    df: pl.DataFrame,
+    cfg: dict,
+    nb_map: dict[str, list],
+    attr_by_vid: dict[str, list],
+    heads_meta: dict,
+    umap_data: dict | None,
+    db_path: Path,
+) -> int:
+    """Write all variant data to DuckDB. Returns count written."""
+    from db import INSERT_VARIANTS_SQL, create_db, variant_to_row
 
-    search_idx = dict(zip(search_agg["gene_upper"].to_list(), search_agg["variants"].to_list(), strict=True))
-    (staging / "search.json").write_bytes(orjson.dumps(search_idx))
+    conn = create_db(db_path)
 
-    # ── Copy static files ────────────────────────────────────────────────
-    shutil.copy2(Path(__file__).parent / "index.html", staging / "index.html")
-    logos_dir = Path(__file__).parent / "logos"
-    if logos_dir.exists():
-        for f in logos_dir.iterdir():
-            shutil.copy2(f, staging / f.name)
+    # ── Variants ─────────────────────────────────────────────────────────
+    (col_data, disruption_heads, effect_heads,
+     ref_d, var_d, eff_d, gt_d,
+     vep_data, gnomad_pops, clinvar_data) = _prepare_variant_data(df, cfg)
+
+    n = df.height
+    batch = []
+    batch_size = 5000
+    for i in track(range(n), description="Writing variants to DB..."):
+        data = _build_variant_dict(
+            i, col_data, disruption_heads, effect_heads,
+            ref_d, var_d, eff_d, gt_d,
+            vep_data, gnomad_pops, clinvar_data,
+            nb_map, attr_by_vid, heads_meta,
+        )
+        batch.append(variant_to_row(data))
+        if len(batch) >= batch_size:
+            conn.executemany(INSERT_VARIANTS_SQL, batch)
+            batch.clear()
+    if batch:
+        conn.executemany(INSERT_VARIANTS_SQL, batch)
+
+    # ── Global config ────────────────────────────────────────────────────
+    global_data = _compute_global_data(df, cfg, heads_meta)
+    for key, value in global_data.items():
+        conn.execute(
+            "INSERT INTO global_config (key, value) VALUES (?, ?)",
+            [key, orjson.dumps(value).decode()],
+        )
+
+    # ── UMAP ─────────────────────────────────────────────────────────────
+    if umap_data:
+        # Store gene_list in global_config
+        conn.execute(
+            "INSERT INTO global_config (key, value) VALUES (?, ?)",
+            ["umap_gene_list", orjson.dumps(umap_data["gene_list"]).decode()],
+        )
+        umap_rows = [
+            (i, umap_data["x"][i], umap_data["y"][i], umap_data["score"][i],
+             umap_data["ids"][i], umap_data["genes"][i], umap_data["labels"][i])
+            for i in range(len(umap_data["x"]))
+        ]
+        conn.executemany(
+            "INSERT INTO umap (idx, x, y, score, variant_id, gene_idx, label_idx) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            umap_rows,
+        )
+
+    # ── Import existing interpretations ──────────────────────────────────
     interp_src = VUS / "interpretations"
     if interp_src.exists():
-        interp_dst = staging / "interpretations"
-        interp_dst.mkdir(parents=True, exist_ok=True)
+        from db import interpretation_to_row
+
+        interp_batch = []
         for f in interp_src.glob("*.json"):
-            shutil.copy2(f, interp_dst / f.name)
+            interp = orjson.loads(f.read_bytes())
+            if interp.get("status") == "ok" and "variant_id" in interp:
+                interp_batch.append(interpretation_to_row(interp))
+        if interp_batch:
+            conn.executemany(
+                "INSERT OR IGNORE INTO interpretations (variant_id, summary, mechanism, confidence, key_evidence, model, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                interp_batch,
+            )
+            logger.info(f"Imported {len(interp_batch)} existing interpretations")
+
+    conn.close()
+    return n
 
 
 # ── Main orchestrator ───────────────────────────────────────────────────
 
 
+DEFAULT_DB_PATH = Path("builds/variants.duckdb")
+
+
 def main(
-    output: Path | None = None,
-    sync: bool = False,
+    db_path: Path = DEFAULT_DB_PATH,
     umap: bool = False,
     neighbors: bool = False,
     probe: str = PROBE,
     dev: int | None = None,
 ) -> Path:
-    """Build the variant viewer static site.
+    """Build the variant viewer DuckDB database.
 
     Args:
-        output: Output directory for rsync (default: /tmp staging only).
-        sync: If True, rsync staging to output directory.
+        db_path: Path for the output DuckDB file.
         umap: Compute UMAP embedding (~40s).
         neighbors: Compute nearest neighbors (requires GPU).
 
     Returns:
-        Path to the staging directory (or output if synced).
+        Path to the DuckDB file.
     """
     global PROBE
     PROBE = probe
@@ -718,28 +736,12 @@ def main(
     attr_by_vid = attribute(df, disruption_heads)
     _t(f"Attribution: {len(attr_by_vid):,} variants")
 
-    # ── Write to staging ─────────────────────────────────────────────────
-    staging = Path(tempfile.mkdtemp(prefix="variant_viewer_"))
+    # ── Write to DuckDB ──────────────────────────────────────────────────
+    _t("Writing to DuckDB...")
+    n = write_db(df, cfg, nb_map, attr_by_vid, heads_meta, umap_data, db_path)
+    _t(f"Done. {n:,} variants in {db_path}")
 
-    _t("Writing variant JSONs...")
-    n = write_variants(df, cfg, nb_map, attr_by_vid, heads_meta, staging)
-    _t(f"Wrote {n:,} variants to staging")
-
-    _t("global.json + search.json...")
-    write_global(df, cfg, heads_meta, umap_data, staging)
-
-    # ── Sync or serve from staging ───────────────────────────────────────
-    if sync and output:
-        _t(f"Syncing to {output}...")
-        output.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["rsync", "-a", "--delete", f"{staging}/", f"{output}/"], check=True)
-        shutil.rmtree(staging)
-        _t(f"Done. {n:,} variants in {output}")
-        return output
-    else:
-        _t(f"Done. {n:,} variants in {staging}")
-        print(f"STAGING_DIR={staging}")
-        return staging
+    return db_path
 
 
 if __name__ == "__main__":

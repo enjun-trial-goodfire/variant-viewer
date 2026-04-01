@@ -1,4 +1,4 @@
-# Variant Effect Viewer
+# EVEE — Evo Variant Effect Explorer
 
 Interactive browser for Evo2 ClinVar probe predictions. Visualizes pathogenicity
 scores, disruption/effect profiles, UMAP embeddings, nearest neighbors, AI
@@ -7,11 +7,32 @@ interpretations, and VEP annotations for ~4.2M ClinVar variants.
 ## Quick start
 
 ```bash
+# Backend (Python)
 uv sync
 uv run vv check                              # validate all data is present
-uv run vv build                              # build static site (~90s)
-uv run vv serve /tmp/variant_viewer_*        # serve with on-demand interpretation
+uv run vv build                              # build DuckDB (~60s, <1s for writes)
+uv run vv serve                              # serve API + frontend on :8501
+
+# Frontend (Svelte + Vite)
+curl -fsSL https://bun.sh/install | bash     # one-time: install bun
+cd frontend && bun install                   # one-time: install JS deps
+bun run build                                # production build → frontend/dist/
 ```
+
+## Development
+
+Two terminals:
+
+```bash
+# Terminal 1: Python API server (DuckDB-backed)
+uv run vv serve                              # API on http://localhost:8501
+
+# Terminal 2: Svelte dev server (hot reload)
+cd frontend && bun run dev                   # Vite on http://localhost:5173
+```
+
+Vite proxies `/api/*` requests to the Python backend. Edit `.svelte` files and
+see changes instantly in the browser.
 
 ## Data
 
@@ -60,9 +81,11 @@ $VV_ARTIFACTS/
 ## CLI
 
 ```bash
-uv run vv build                              # build static site to /tmp
+uv run vv build                              # build DuckDB → builds/variants.duckdb
 uv run vv build --umap --neighbors           # build with UMAP + neighbors (needs GPU)
-uv run vv serve /tmp/variant_viewer_*        # serve with AI interpretation
+uv run vv build --dev 100                    # fast dev build (100 variants)
+uv run vv serve                              # serve API from DuckDB + frontend
+uv run vv serve --db path/to/db.duckdb      # serve a specific database
 uv run vv eval $ACTS/probe_v12               # compute per-head metrics → eval.json
 uv run vv log-eval $ACTS/probe_v12           # upload eval.json to wandb
 uv run vv pipeline $ACTS/probe_v12           # full chain: extract → eval → build
@@ -99,9 +122,10 @@ sbatch --gpus=4 pipeline/train.sh --name probe_v12 --focal-gamma 0.5
 | File | Role |
 |------|------|
 | `cli.py` | Typer CLI entry point (`uv run vv <cmd>`) |
-| `build.py` | Static site generator: variants.parquet + scores → per-variant JSONs |
-| `serve.py` | Dev server with on-demand Claude interpretation |
-| `index.html` | Single-page frontend (vanilla JS + CSS) |
+| `build.py` | Build pipeline: variants.parquet + scores → DuckDB |
+| `db.py` | DuckDB schema, row/dict conversion helpers |
+| `serve.py` | DuckDB-backed API server + frontend static serving |
+| `frontend/` | Svelte 5 + Vite + TypeScript frontend |
 | `attribution.py` | Z-score disruption attribution |
 | `prompts.py` | Claude interpretation prompt builder |
 | `display.py` | Head display names, curation, quality filtering |
@@ -114,6 +138,42 @@ sbatch --gpus=4 pipeline/train.sh --name probe_v12 --focal-gamma 0.5
 | `pipeline/extract.py` | 3-view scoring: activations → embeddings + scores |
 | `pipeline/eval.py` | Per-head eval: AUC, correlation → eval.json |
 | `pipeline/interpret.py` | Batch Claude interpretation |
+
+### Frontend components
+
+```
+frontend/src/
+  App.svelte                  # Hash router + layout
+  components/
+    Header.svelte             # Search bar + branding
+    LandingPage.svelte        # UMAP scatter + description
+    VariantPage.svelte        # Loads variant, orchestrates cards
+    cards/
+      VerdictCard.svelte      # Gene, coordinates, score, ClinVar metadata
+      InterpretationCard.svelte  # AI interpretation (on-demand)
+      DisruptionCard.svelte   # Top disruptions + all disruptions + effects
+      PredictorsCard.svelte   # Computational predictors
+      NeighborsCard.svelte    # Nearest neighbors table
+      DistributionCard.svelte # Score distribution histogram
+      PopulationCard.svelte   # gnomAD population frequencies
+  lib/
+    api.ts                    # Dual-mode fetch (local DuckDB vs deployed DynamoDB)
+    types.ts                  # TypeScript interfaces
+    stores.ts                 # Svelte stores
+    helpers.ts                # Display helpers
+    colors.ts                 # Color utilities
+```
+
+## Deployment
+
+### Local (DuckDB)
+```bash
+uv run vv build && cd frontend && bun run build && cd .. && uv run vv serve
+```
+
+### AWS (DynamoDB + CloudFront)
+See `terraform/` for infrastructure. The frontend detects `CONFIG.API_BASE`
+(set via `config.js` in S3) to switch between local and deployed mode.
 
 ## Transfer to new server
 

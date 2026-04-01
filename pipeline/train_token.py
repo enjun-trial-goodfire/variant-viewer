@@ -94,7 +94,8 @@ def train(
     steps_per_epoch = len(rank_chunks)
 
     if rank == 0:
-        logger.info(f"Chunks: {n_chunks} total, {steps_per_epoch} per rank, ~{steps_per_epoch * 39 * 256} tokens/epoch")
+        items_per_chunk = acts_ds.metadata.chunks[0].num_items
+        logger.info(f"Chunks: {n_chunks} total, {steps_per_epoch} per rank, ~{steps_per_epoch * items_per_chunk * 256} tokens/epoch")
 
     # Probe — bilinear, no sqrtm
     probe = MultiHeadCovProbeV2(
@@ -150,31 +151,35 @@ def train(
             # Flatten tokens: [B*256, 1, 8192]
             all_tokens = token_acts.reshape(B * 256, 1, d_model)
 
-            # Process in mini-batches to avoid GPU OOM on logits
-            # 9984 tokens × 38924 logits = 1.5GB; 1024 tokens = 160MB
+            # Process in mini-batches with gradient accumulation.
+            # Each mini-batch: forward → backward → free graph. Only the last
+            # mini-batch triggers DDP gradient sync (via no_sync context).
             mini_batch = 1024
-            total_loss = torch.tensor(0.0, device=device)
             n_mini = (all_tokens.shape[0] + mini_batch - 1) // mini_batch
+            no_sync = probe.no_sync if distributed else lambda: torch.enable_grad()
 
+            optimizer.zero_grad()
+            total_loss_val = 0.0
             for mb in range(n_mini):
                 start = mb * mini_batch
                 end = min(start + mini_batch, all_tokens.shape[0])
                 mb_acts = all_tokens[start:end].to(device, non_blocking=True)
                 mb_labels = labels[start:end].to(device, non_blocking=True)
 
-                mb_logits = probe(mb_acts)
-                mb_loss = multihead_loss_v2(mb_logits, mb_labels, specs_tuple, focal_gamma=focal_gamma)
-                total_loss = total_loss + mb_loss / n_mini
+                # Skip DDP sync for all but the last mini-batch
+                ctx = no_sync() if mb < n_mini - 1 else torch.enable_grad()
+                with ctx:
+                    mb_logits = probe(mb_acts)
+                    mb_loss = multihead_loss_v2(mb_logits, mb_labels, specs_tuple, focal_gamma=focal_gamma)
+                    (mb_loss / n_mini).backward()
+                total_loss_val += mb_loss.item() / n_mini
 
-            loss = total_loss
-
-            optimizer.zero_grad()
-            loss.backward()
+            loss = total_loss_val
             optimizer.step()
 
             if rank == 0:
-                pbar.set_postfix(loss=f"{loss.item():.3f}")
-                wandb.log({"loss": loss.item()})
+                pbar.set_postfix(loss=f"{loss:.3f}")
+                wandb.log({"loss": loss})
 
         if rank == 0:
             raw_p = probe.module if distributed else probe

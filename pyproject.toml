@@ -25,6 +25,7 @@ dependencies = [
     "wandb>=0.23",
     "starlette>=0.45",
     "uvicorn[standard]",
+    "duckdb>=1.2",
 ]
 
 [project.scripts]
@@ -40,7 +41,7 @@ train = ["wandb>=0.23"]
 
 [tool.setuptools]
 packages = ["probe", "pipeline"]
-py-modules = ["cli", "build", "serve", "constants", "display", "paths", "loaders", "prompts", "attribution", "training"]
+py-modules = ["cli", "build", "serve", "db", "constants", "display", "paths", "loaders", "prompts", "attribution", "training"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -52,25 +52,26 @@ def build(
     probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
     umap: bool = typer.Option(False, help="Compute UMAP embedding (~40s)"),
     neighbors: bool = typer.Option(False, help="Compute nearest neighbors (GPU)"),
-    sync: Optional[Path] = typer.Option(None, help="Rsync staging to this directory after build"),
-    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants, skip UMAP + neighbors"),
+    db: Path = typer.Option(Path("builds/variants.duckdb"), help="Output DuckDB path"),
+    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants"),
 ):
-    """Build the static variant viewer site to /tmp."""
+    """Build the variant viewer DuckDB database."""
     from build import main as _build
 
-    staging = _build(output=sync, sync=bool(sync), umap=umap, neighbors=neighbors, probe=probe, dev=dev)
-    rprint(f"[green]Built to:[/] {staging}")
+    result = _build(db_path=db, umap=umap, neighbors=neighbors, probe=probe, dev=dev)
+    rprint(f"[green]Built:[/] {result}")
 
 
 @app.command()
 def serve(
-    build_dir: Path = typer.Argument(..., help="Build directory to serve"),
+    db: Path = typer.Option(Path("builds/variants.duckdb"), help="DuckDB database path"),
+    static: Optional[Path] = typer.Option(None, help="Frontend static files directory (default: frontend/dist)"),
     port: int = typer.Option(8501, help="Server port"),
     host: str = typer.Option("0.0.0.0", help="Server host"),
 ):
-    """Serve a build directory with on-demand Claude interpretation."""
-    if not build_dir.exists():
-        rprint(f"[red]Build directory not found:[/] {build_dir}")
+    """Serve the variant viewer API from DuckDB."""
+    if not db.exists():
+        rprint(f"[red]Database not found:[/] {db}\nRun: uv run vv build")
         raise typer.Exit(1)
 
     import os
@@ -80,8 +81,16 @@ def serve(
 
     from serve import create_app
 
-    server = create_app(build_dir)
-    logger.info(f"Serving {build_dir} on http://{host}:{port}")
+    # Default to frontend/dist if it exists
+    static_dir = static or (ROOT / "frontend" / "dist")
+    if not static_dir.exists():
+        static_dir = None
+        logger.warning(f"No frontend build found at {ROOT / 'frontend' / 'dist'} — API-only mode")
+
+    server = create_app(db, static_dir)
+    logger.info(f"Serving {db} on http://{host}:{port}")
+    if static_dir:
+        logger.info(f"Frontend: {static_dir}")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.warning("ANTHROPIC_API_KEY not set — interpretation endpoint will return 503")
     uvicorn.run(server, host=host, port=port)
