@@ -137,24 +137,36 @@ def train(
 
             B = acts_chunk.acts.shape[0]
 
-            # Unpack on CPU first to avoid putting full [B, 2, 3, 256, 4096] on GPU
-            raw = acts_chunk.acts.float()  # CPU
+            # Unpack ref view on CPU
+            raw = acts_chunk.acts.float()
             acts = raw.reshape(B, 2, 3, 256, 4096)
-            fwd_ref = acts[:, 0, 1]  # [B, 256, 4096] CPU
-            bwd_ref = acts[:, 1, 1]  # [B, 256, 4096] CPU
-            token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192] CPU
+            fwd_ref = acts[:, 0, 1]  # [B, 256, 4096]
+            bwd_ref = acts[:, 1, 1]  # [B, 256, 4096]
+            token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192]
 
-            # Labels on CPU: [B, n_heads, 256] → [B, 256, n_heads]
-            labels = labels_chunk.acts.float().permute(0, 2, 1)  # CPU
+            # Labels: [B, n_heads, 256] → [B*256, n_heads]
+            labels = labels_chunk.acts.float().permute(0, 2, 1).reshape(B * 256, n_heads)
 
-            # Flatten and move only what's needed to GPU
-            n_tokens = B * 256
-            flat_acts = token_acts.reshape(n_tokens, 1, d_model).to(device, non_blocking=True)
-            flat_labels = labels.reshape(n_tokens, n_heads).to(device, non_blocking=True)
+            # Flatten tokens: [B*256, 1, 8192]
+            all_tokens = token_acts.reshape(B * 256, 1, d_model)
 
-            # Forward + loss
-            logits = probe(flat_acts)
-            loss = multihead_loss_v2(logits, flat_labels, specs_tuple, focal_gamma=focal_gamma)
+            # Process in mini-batches to avoid GPU OOM on logits
+            # 9984 tokens × 38924 logits = 1.5GB; 1024 tokens = 160MB
+            mini_batch = 1024
+            total_loss = torch.tensor(0.0, device=device)
+            n_mini = (all_tokens.shape[0] + mini_batch - 1) // mini_batch
+
+            for mb in range(n_mini):
+                start = mb * mini_batch
+                end = min(start + mini_batch, all_tokens.shape[0])
+                mb_acts = all_tokens[start:end].to(device, non_blocking=True)
+                mb_labels = labels[start:end].to(device, non_blocking=True)
+
+                mb_logits = probe(mb_acts)
+                mb_loss = multihead_loss_v2(mb_logits, mb_labels, specs_tuple, focal_gamma=focal_gamma)
+                total_loss = total_loss + mb_loss / n_mini
+
+            loss = total_loss
 
             optimizer.zero_grad()
             loss.backward()
