@@ -56,4 +56,4 @@ ignore = [
 ]
 
 [tool.uv.sources]
-goodfire-core = { path = "../goodfire-core", editable = true }
+goodfire-core = { path = "../goodfire-core" }

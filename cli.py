@@ -18,6 +18,8 @@ from typing import Optional
 import typer
 from rich import print as rprint
 
+from constants import PROBE_NAME
+
 app = typer.Typer(help="Variant Effect Viewer", no_args_is_help=True)
 ROOT = Path(__file__).parent
 
@@ -41,7 +43,7 @@ def _sbatch(*args: str) -> str:
 
 
 @app.command()
-def check(probe: str = typer.Argument("probe_v11", help="Probe name")):
+def check(probe: str = typer.Argument(PROBE_NAME, help="Probe name")):
     """Validate all required data and artifacts exist."""
     result = subprocess.run(["bash", "preflight.sh", probe], cwd=ROOT)
     raise typer.Exit(result.returncode)
@@ -49,7 +51,7 @@ def check(probe: str = typer.Argument("probe_v11", help="Probe name")):
 
 @app.command()
 def transform(
-    probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
+    probe: str = typer.Option(PROBE_NAME, help="Probe name (e.g. probe_v11)"),
     output: Path = typer.Option(Path("builds/clean.parquet"), help="Output parquet path"),
     dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants"),
 ):
@@ -62,7 +64,7 @@ def transform(
 
 @app.command()
 def build(
-    probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
+    probe: str = typer.Option(PROBE_NAME, help="Probe name (e.g. probe_v11)"),
     parquet: Path = typer.Option(Path("builds/clean.parquet"), help="Input parquet from transform step"),
     umap: bool = typer.Option(False, help="Compute UMAP embedding (~40s)"),
     neighbors: bool = typer.Option(False, help="Compute nearest neighbors (GPU)"),

@@ -48,16 +48,22 @@ def _flat_to_prompt_dict(flat: dict, heads_config: dict) -> dict:
                 effect[h] = val
 
     return {
-        "id": flat.get("id", ""),
-        "gene": flat.get("gene", ""),
-        "score": flat.get("score", 0),
+        "id": flat.get("variant_id", ""),
+        "gene": flat.get("gene_name", ""),
+        "score": flat.get("score_pathogenic", 0),
         "consequence": flat.get("consequence", ""),
         "substitution": flat.get("substitution", ""),
         "hgvsc": flat.get("hgvsc", ""),
         "hgvsp": flat.get("hgvsp", ""),
+        "impact": flat.get("vep_impact", ""),
+        "exon": flat.get("exon", ""),
         "label": flat.get("label", ""),
+        "loeuf": flat.get("loeuf"),
+        "gnomad": flat.get("gnomad"),
+        "domains": json.loads(flat["domains"]) if isinstance(flat.get("domains"), str) else flat.get("domains", []),
         "disruption": disruption,
         "effect": effect,
+        "gt": {k[3:]: v for k, v in flat.items() if k.startswith("gt_") and isinstance(v, (int, float))},
         "neighbors": json.loads(flat["neighbors"]) if isinstance(flat.get("neighbors"), str) else flat.get("neighbors", []),
     }
 
@@ -74,12 +80,16 @@ if _env.exists():
 
 
 async def global_endpoint(request):
-    """GET /api/global — heads, distributions, umap, and metadata."""
+    """GET /api/global — heads config + all distributions (~17KB total)."""
     cur = request.app.state.db.cursor()
-    rows = cur.execute("SELECT key, value FROM global_config").fetchall()
-    result = {}
-    for key, value in rows:
-        result[key] = json.loads(value)
+    heads_row = cur.execute("SELECT value FROM global_config WHERE key = 'heads'").fetchone()
+    dist_row = cur.execute("SELECT value FROM global_config WHERE key = 'distributions'").fetchone()
+
+    result: dict = {}
+    if heads_row:
+        result["heads"] = json.loads(heads_row[0])
+    if dist_row:
+        result["distributions"] = json.loads(dist_row[0])
     return JSONResponse(result)
 
 
@@ -92,11 +102,12 @@ async def umap_endpoint(request):
     return JSONResponse(json.loads(row[0]))
 
 
+
 async def variant_endpoint(request):
     """GET /api/variants/{id} — flat row as-is."""
     vid = request.path_params["variant_id"]
     cur = request.app.state.db.cursor()
-    row = cur.execute("SELECT * FROM variants WHERE id = ?", [vid]).fetchone()
+    row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
@@ -111,16 +122,16 @@ async def search_endpoint(request):
 
     cur = request.app.state.db.cursor()
     results = cur.execute(
-        "SELECT id, label, score, consequence FROM variants "
-        "WHERE upper(gene) = ? ORDER BY score DESC LIMIT 30",
+        "SELECT variant_id, label_display, score_pathogenic, consequence_display FROM variants "
+        "WHERE upper(gene_name) = ? ORDER BY score_pathogenic DESC LIMIT 30",
         [q],
     ).fetchall()
 
     if len(results) < 30:
         more = cur.execute(
-            "SELECT id, label, score, consequence FROM variants "
-            "WHERE upper(gene) LIKE ? AND upper(gene) != ? "
-            "ORDER BY score DESC LIMIT ?",
+            "SELECT variant_id, label_display, score_pathogenic, consequence_display FROM variants "
+            "WHERE upper(gene_name) LIKE ? AND upper(gene_name) != ? "
+            "ORDER BY score_pathogenic DESC LIMIT ?",
             [f"{q}%", q, 30 - len(results)],
         ).fetchall()
         results.extend(more)
@@ -136,9 +147,7 @@ _variant_locks: dict[str, asyncio.Lock] = {}
 
 
 def _get_lock(vid: str) -> asyncio.Lock:
-    if vid not in _variant_locks:
-        _variant_locks[vid] = asyncio.Lock()
-    return _variant_locks[vid]
+    return _variant_locks.setdefault(vid, asyncio.Lock())
 
 
 async def interpret_endpoint(request):
@@ -166,7 +175,7 @@ async def interpret_endpoint(request):
         return JSONResponse({"status": "unavailable", "error": "ANTHROPIC_API_KEY not set"}, status_code=503)
 
     # 3. Load variant (flat row → adapt for prompt builder)
-    row = cur.execute("SELECT * FROM variants WHERE id = ?", [vid]).fetchone()
+    row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"status": "not_found", "error": f"Variant {vid} not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
@@ -227,16 +236,15 @@ async def interpret_endpoint(request):
                 "generated_at": time.time(),
             })
 
-            # Write to DB
-            with duckdb.connect(str(db_path)) as write_conn:
-                write_conn.execute(
-                    "INSERT OR IGNORE INTO interpretations "
-                    "(variant_id, summary, mechanism, confidence, key_evidence, model, generated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [vid, result["summary"], result["mechanism"], result["confidence"],
-                     orjson.dumps(result["key_evidence"]).decode(),
-                     result["model"], result["generated_at"]],
-                )
+            # Cache in DB (same connection, no conflict)
+            request.app.state.db.execute(
+                "INSERT OR IGNORE INTO interpretations "
+                "(variant_id, summary, mechanism, confidence, key_evidence, model, generated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [vid, result["summary"], result["mechanism"], result["confidence"],
+                 orjson.dumps(result["key_evidence"]).decode(),
+                 result["model"], result["generated_at"]],
+            )
             logger.info(f"Cached interpretation for {vid}")
 
             return JSONResponse(result)
@@ -270,7 +278,7 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
     ]
 
     app = Starlette(routes=routes, middleware=middleware)
-    app.state.db = duckdb.connect(str(db_path), read_only=True)
+    app.state.db = duckdb.connect(str(db_path))
     app.state.db_path = db_path
 
     # Load heads config for the interpret endpoint's prompt builder

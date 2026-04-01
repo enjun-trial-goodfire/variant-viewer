@@ -1,27 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getUmap } from '../lib/api';
-  import { globalData, umapData } from '../lib/stores';
+  import { umapData } from '../lib/stores';
   import UmapCanvas from './UmapCanvas.svelte';
+  import type { UmapData } from '../lib/types';
 
-  let umap = $state<any>(null);
+  let umap = $state<UmapData | null>(null);
   let umapMode = $state<'predicted' | 'labeled'>('predicted');
 
   onMount(async () => {
-    // Try to load umap from global data first
-    const unsub = globalData.subscribe(g => {
-      if (g?.distributions) {
-        // Global data loaded
-      }
-    });
-
     const data = await getUmap();
     if (data) {
       umap = data;
       umapData.set(data);
     }
-
-    return unsub;
   });
 </script>
 
@@ -60,7 +52,7 @@
           <span style="font-size:10px">100%</span>
         </span>
       {:else}
-        {#each [['pathogenic','#c55'],['likely path.','#DB8A48'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']] as [name, color]}
+        {#each [['pathogenic','#c55'],['likely path.','#d88'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']] as [name, color]}
           <span style="display:inline-flex;align-items:center;gap:3px">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{color}{name==='VUS'?';opacity:0.6':''}"></span>
             {name}

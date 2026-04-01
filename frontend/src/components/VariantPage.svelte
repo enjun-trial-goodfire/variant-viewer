@@ -5,9 +5,10 @@
   import VerdictCard from './cards/VerdictCard.svelte';
   import InterpretationCard from './cards/InterpretationCard.svelte';
   import DisruptionCard from './cards/DisruptionCard.svelte';
+  import EffectsCard from './cards/EffectsCard.svelte';
   import PredictorsCard from './cards/PredictorsCard.svelte';
   import NeighborsCard from './cards/NeighborsCard.svelte';
-  import DistributionCard from './cards/DistributionCard.svelte';
+  // DistributionCard removed — pathogenicity histogram is now in PredictorsCard
   import PopulationCard from './cards/PopulationCard.svelte';
 
   interface Props { variantId: string; }
@@ -41,15 +42,17 @@
   </div>
 {:else if variant && $globalData}
   <VerdictCard {variant} global={$globalData} />
-  <InterpretationCard variantId={variant.id} />
-  {#if variant.attribution?.length}
+  <InterpretationCard variantId={variant.variant_id} />
+  {#if Object.keys(variant.disruption ?? {}).length}
     <DisruptionCard {variant} global={$globalData} />
+  {/if}
+  {#if Object.keys(variant.effect ?? {}).length}
+    <EffectsCard {variant} global={$globalData} />
   {/if}
   <PredictorsCard {variant} global={$globalData} />
   {#if variant.neighbors?.length}
     <NeighborsCard {variant} />
   {/if}
-  <DistributionCard {variant} distributions={$globalData.distributions} />
   {#if hasPopulation}
     <PopulationCard {variant} />
   {/if}

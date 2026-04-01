@@ -23,15 +23,16 @@ export interface Attribution {
 export interface Neighbor {
   id: string;
   gene: string;
-  consequence: string;
+  consequence_display: string;
   label: string;
+  label_display: string;
   score: number;
   similarity: number;
 }
 
 export interface Variant {
-  id: string;
-  gene: string;
+  variant_id: string;
+  gene_name: string;
   chrom: string;
   pos: number;
   ref: string;
@@ -39,24 +40,31 @@ export interface Variant {
   vcf_pos: number;
   gene_strand: string;
   consequence: string;
+  consequence_display: string;
   substitution: string;
   label: string;
+  label_display: string;
   significance: string;
   stars: number;
   disease: string;
-  score: number;
+  score_pathogenic: number;
   rs_id: string;
   allele_id: number | null;
   gene_id: string;
   hgvsc: string;
+  hgvsc_short: string;
   hgvsp: string;
-  impact: string;
+  hgvsp_short: string;
+  vep_impact: string;
   exon: string;
-  transcript: string;
-  swissprot: string;
+  vep_transcript_id: string;
+  vep_protein_id: string;
   domains: Domain[];
   loeuf: number | null;
+  loeuf_label: string | null;
   gnomad: number | null;
+  gnomad_display: string;
+  gnomad_label: string | null;
   gnomad_pop: Record<string, number>;
   variation_id: string;
   cytogenetic: string;
@@ -67,14 +75,11 @@ export interface Variant {
   last_evaluated: string | null;
   clinical_features: string[];
   origin: string;
-  disruption: Record<string, [number, number]>;
-  effect: Record<string, number>;
+  disruption: Record<string, { ref: number; var: number; z: number; ref_lr: number; var_lr: number }>;
+  effect: Record<string, { value: number; lr: number }>;
   gt: Record<string, number>;
   attribution: Attribution[];
   neighbors: Neighbor[];
-  nP: number;
-  nB: number;
-  nV: number;
 }
 
 export interface SearchResult {
@@ -88,12 +93,22 @@ export interface DistributionData {
   benign: number[];
   pathogenic: number[];
   bins: number;
-  range?: [number, number];
+  range: [number, number];
+  _bTotal: number;
+  _pTotal: number;
+}
+
+export interface HeatmapData {
+  data: [number, number, number, number][];
+  ref_range: [number, number];
+  var_range: [number, number];
+  bins: number;
 }
 
 export interface HeadDistribution {
   delta?: DistributionData;
   ref?: DistributionData;
+  heatmap?: HeatmapData;
   benign?: number[];
   pathogenic?: number[];
   bins?: number;
@@ -110,17 +125,26 @@ export interface EvalMetric {
   value: number;
 }
 
+export interface HeadConfig {
+  display?: string;
+  category: 'disruption' | 'effect';
+  group?: string;
+  eval?: EvalMetric;
+  mean?: number;
+  std?: number;
+  description?: string;
+  quality?: string;
+  predictor?: { order: number; threshold: number; invert?: boolean; display?: string };
+  exclude_from_attribution?: boolean;
+  exclude_from_effect_expansion?: boolean;
+}
+
 export interface GlobalData {
   distributions: Record<string, HeadDistribution | DistributionData>;
-  eval: Record<string, EvalMetric>;
   heads: {
-    disruption: Record<string, string[]>;
-    effect: Record<string, string[]>;
+    _meta: Record<string, any>;
+    heads: Record<string, HeadConfig>;
   };
-  display: Record<string, string>;
-  head_stats: Record<string, HeadStat>;
-  descriptions: Record<string, string>;
-  decomposition: any;
 }
 
 export interface UmapData {

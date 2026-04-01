@@ -12,6 +12,7 @@ ARTIFACTS = Path(os.environ.get(
 DATA = Path(__file__).parent / "data"
 VARIANTS = DATA / "variants.parquet"
 HEADS = DATA / "heads.json"
+DECONFOUNDED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
 
 
 # ── ID utilities ─────────────────────────────────────────────────────────

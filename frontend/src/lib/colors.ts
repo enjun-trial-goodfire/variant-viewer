@@ -1,51 +1,32 @@
-import type { HeadDistribution } from './types';
+// ── Color scales ─────────────────────────────────────────────────────
+//
+// Two independent axes:
+//   Classification: blue (#27a) → light blue (#6ac) → gray (#bbb) → pink (#d88) → red (#c55)
+//   Disruption:     orange (#DB8A48) for decrease, green (#4a9) for increase
 
+/** Continuous score → color (blue at 0, gray at 0.5, red at 1). */
 export function scoreColor(s: number): string {
+  if (s == null || isNaN(s)) return 'var(--text-muted)';
   return `rgb(${Math.round(215 * s)}, 80, ${Math.round(178 * (1 - s))})`;
 }
 
-export function barColor(v: number): string {
-  if (v > 0.9) return '#c55';
-  if (v > 0.75) return '#DB8A48';
-  if (v < 0.1) return '#27a';
-  if (v < 0.25) return '#6ac';
+/** 5-tier classification color from a likelihood ratio (0 = benign, 1 = pathogenic). */
+export function barColor(lr: number): string {
+  if (lr > 0.9) return '#c55';
+  if (lr > 0.75) return '#d88';
+  if (lr < 0.1) return '#27a';
+  if (lr < 0.25) return '#6ac';
   return '#bbb';
 }
 
-export function headColor(
-  head: string,
-  value: number,
-  isDelta: boolean,
-  distributions: Record<string, HeadDistribution> | null,
-): string {
-  if (!distributions) return '#bbb';
-  let dist = distributions[head] as any;
-  if (!dist) return '#bbb';
-  if (dist.ref) dist = dist.ref;
-  if (!dist.benign) return '#bbb';
-  const [lo, hi] = dist.range || [0, 1];
-  const bins = dist.bins || 40;
-  const mapped = (value - lo) / (hi - lo);
-  const bin = Math.max(0, Math.min(bins - 1, Math.floor(mapped * bins)));
-  const bRaw = dist.benign[bin] || 0;
-  const pRaw = dist.pathogenic[bin] || 0;
-  if (bRaw + pRaw < 5) return '#bbb';
-  const bTotal = dist.benign.reduce((a: number, x: number) => a + x, 0) || 1;
-  const pTotal = dist.pathogenic.reduce((a: number, x: number) => a + x, 0) || 1;
-  return barColor(pRaw / pTotal / (pRaw / pTotal + bRaw / bTotal));
-}
-
+/** 5-tier color for predictor bars (same scale, with optional inversion). */
 export function tierColor(val: number, invert: boolean): string {
-  const v = invert ? 1 - val : val;
-  if (v >= 0.8) return '#c55';
-  if (v >= 0.6) return '#DB8A48';
-  if (v >= 0.4) return '#bbb';
-  if (v >= 0.2) return '#6ac';
-  return '#27a';
+  return barColor(invert ? 1 - val : val);
 }
 
+/** Disruption direction color (orange = decreased, green = increased). */
 export function deltaColor(z: number, sign: number): { text: string; bar: string } {
-  return z < 1
-    ? { text: 'var(--text-muted)', bar: '#ccc' }
-    : { text: sign < 0 ? '#c55' : '#4a9', bar: sign < 0 ? '#c55' : '#4a9' };
+  if (z < 1) return { text: 'var(--text-muted)', bar: '#ccc' };
+  const color = sign < 0 ? 'var(--decrease)' : 'var(--increase)';
+  return { text: color, bar: color };
 }

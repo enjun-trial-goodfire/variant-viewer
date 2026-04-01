@@ -1,66 +1,25 @@
 import type { GlobalData, Interpretation, SearchResult, UmapData, Variant } from './types';
 
-declare global {
-  interface Window {
-    __APP_CONFIG__?: { API_BASE?: string; STATIC_BASE?: string };
-  }
-}
-
-const config = {
-  API_BASE: window.__APP_CONFIG__?.API_BASE || '',
-  STATIC_BASE: window.__APP_CONFIG__?.STATIC_BASE || '',
-};
-
-const isApiMode = !!config.API_BASE;
-
-function apiUrl(path: string): string {
-  if (isApiMode) return `${config.API_BASE}${path}`;
-  return `/api${path}`;
-}
-
 export async function getGlobal(): Promise<GlobalData> {
-  if (isApiMode) {
-    const resp = await fetch(`${config.STATIC_BASE || config.API_BASE}/global.json`);
-    return resp.json();
-  }
-  const resp = await fetch('/api/global');
-  return resp.json();
+  return (await fetch('/api/global')).json();
 }
 
 export async function getUmap(): Promise<UmapData | null> {
-  if (isApiMode) {
-    const resp = await fetch(`${config.STATIC_BASE || config.API_BASE}/umap.json`);
-    if (!resp.ok) return null;
-    return resp.json();
-  }
   const resp = await fetch('/api/umap');
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  return data;
+  return resp.ok ? resp.json() : null;
 }
 
 export async function getVariant(id: string): Promise<Variant> {
-  if (isApiMode) {
-    const resp = await fetch(`${config.API_BASE}/variants/${encodeURIComponent(id)}`);
-    if (!resp.ok) throw new Error(`Variant not found: ${id}`);
-    return resp.json();
-  }
   const resp = await fetch(`/api/variants/${encodeURIComponent(id)}`);
   if (!resp.ok) throw new Error(`Variant not found: ${id}`);
-  return resp.json();
+  return normalizeVariant(await resp.json());
 }
 
 export async function search(query: string): Promise<SearchResult[]> {
   const q = query.trim();
   if (q.length < 2) return [];
-  if (isApiMode) {
-    const resp = await fetch(`${config.API_BASE}/variants/search?q=${encodeURIComponent(q)}`);
-    if (!resp.ok) return [];
-    return resp.json();
-  }
   const resp = await fetch(`/api/variants/search?q=${encodeURIComponent(q)}`);
-  if (!resp.ok) return [];
-  return resp.json();
+  return resp.ok ? resp.json() : [];
 }
 
 export function fetchInterpretation(
@@ -70,50 +29,75 @@ export function fetchInterpretation(
   onLoading: () => void,
   onError: () => void,
 ): void {
-  const useApi = isApiMode;
-  const url = useApi
-    ? `${config.API_BASE}/variants/${encodeURIComponent(variantId)}/analysis`
-    : `/api/interpret/${encodeURIComponent(variantId)}`;
-
+  const url = `/api/interpret/${encodeURIComponent(variantId)}`;
   onLoading();
-
   let attempt = 0;
-  const maxAttempts = 20;
-
   function poll() {
     if (signal.aborted) return;
     attempt++;
-
     fetch(url, { signal })
       .then(r => {
-        if (signal.aborted) return null;
-        if (!useApi) {
-          if (!r.ok) throw new Error(`${r.status}`);
-          return r.json().then((interp: Interpretation) => {
-            if (interp && interp.status === 'ok') onResult(interp);
-            else onError();
-          });
-        }
-        if (r.status === 200) {
-          return r.json().then((data: any) => {
-            if (data.result) onResult(data.result);
-            else if (data.status === 'ok') onResult(data);
-            else onError();
-          });
-        }
-        if (r.status === 202) {
-          if (attempt >= maxAttempts) { onError(); return; }
-          const delay = Math.min(2000 * Math.pow(1.5, attempt - 1), 30000);
-          setTimeout(poll, delay);
-          return;
-        }
-        throw new Error(`${r.status}`);
+        if (signal.aborted) return;
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json().then((data: any) => {
+          if (data?.status === 'ok') onResult(data);
+          else if (data?.status === 'processing' && attempt < 20) {
+            setTimeout(poll, Math.min(2000 * 1.5 ** (attempt - 1), 30000));
+          } else onError();
+        });
       })
-      .catch(e => {
-        if (e.name === 'AbortError') return;
-        onError();
-      });
+      .catch(e => { if (e.name !== 'AbortError') onError(); });
+  }
+  poll();
+}
+
+// ── Flat row → Variant ──────────────────────────────────────────────
+//
+// The DB stores precomputed per-variant-per-head values:
+//   ref_score_{h}, var_score_{h}  → disruption ref/var
+//   z_{h}                         → precomputed z-score
+//   ref_lr_{h}, var_lr_{h}        → precomputed likelihood ratios
+//   score_{h}                     → effect value
+//   lr_{h}                        → precomputed effect likelihood ratio
+//   gt_{h}                        → ground truth
+
+const JSON_FIELDS = new Set(['acmg', 'clinical_features', 'submitters', 'domains', 'neighbors', 'attribution']);
+const GNOMAD_POP_COLS = new Set(['gnomad_afr_af', 'gnomad_amr_af', 'gnomad_asj_af', 'gnomad_eas_af', 'gnomad_fin_af', 'gnomad_nfe_af', 'gnomad_sas_af']);
+
+function normalizeVariant(row: Record<string, any>): Variant {
+  const disruption: Variant['disruption'] = {};
+  const effect: Variant['effect'] = {};
+  const gt: Record<string, number> = {};
+  const gnomad_pop: Record<string, number> = {};
+  const meta: Record<string, any> = {};
+
+  // First pass: collect ref_score values to know which disruption heads exist
+  for (const [k, v] of Object.entries(row)) {
+    if (v == null) continue;
+    if (k.startsWith('ref_score_')) {
+      const h = k.slice(10);
+      const va = row[`var_score_${h}`];
+      if (va != null) {
+        disruption[h] = {
+          ref: v, var: va,
+          z: row[`z_${h}`] ?? 0,
+          ref_lr: row[`ref_lr_${h}`] ?? 0.5,
+          var_lr: row[`var_lr_${h}`] ?? 0.5,
+        };
+      }
+    } else if (k.startsWith('score_') && k !== 'score_pathogenic') {
+      const h = k.slice(6);
+      effect[h] = { value: v, lr: row[`lr_${h}`] ?? 0.5 };
+    } else if (k.startsWith('gt_')) {
+      gt[k.slice(3)] = v;
+    } else if (GNOMAD_POP_COLS.has(k)) {
+      if (v > 0) gnomad_pop[k.slice(7, -3)] = v;
+    } else if (JSON_FIELDS.has(k)) {
+      meta[k] = typeof v === 'string' ? JSON.parse(v) : v;
+    } else if (!k.startsWith('var_score_') && !k.startsWith('z_') && !k.startsWith('ref_lr_') && !k.startsWith('var_lr_') && !k.startsWith('lr_')) {
+      meta[k] = v;
+    }
   }
 
-  poll();
+  return { ...meta, disruption, effect, gt, gnomad_pop } as Variant;
 }

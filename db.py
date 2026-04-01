@@ -1,11 +1,10 @@
 """DuckDB schema and helpers for the variant viewer.
 
-The serving database stores flat columnar data with indexes.
-The server returns rows as-is — the frontend derives structure
-from column naming conventions + heads.json.
+The build step writes columns with names matching the frontend Variant type.
+The server returns rows as-is. No transformation at serve time.
 
 Tables:
-  - variants: flat columns from scores.feather + variants.parquet, indexed
+  - variants: columns named to match frontend Variant type, indexed on id + gene
   - global_config: key-value store for heads, distributions, umap
   - interpretations: cached Claude interpretations
 """

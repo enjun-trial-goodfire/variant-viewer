@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tierColor } from '../../lib/colors';
+  import Swatch from '../Swatch.svelte';
+  import HeadHistogram from '../HeadHistogram.svelte';
   import type { Variant, GlobalData } from '../../lib/types';
 
   interface Props { variant: Variant; global: GlobalData; }
@@ -7,70 +9,155 @@
 
   let showHelp = $state(false);
 
-  const predictors = [
-    {name: 'PhyloP 100-way', key: 'phylop_100way', threshold: 0.5, invert: false, desc: 'Evolutionary conservation'},
-    {name: 'PhastCons 100-way', key: 'phastcons_100way', threshold: 0.5, invert: false, desc: 'Conserved element probability'},
-    {name: 'GERP', key: 'gerp_c', threshold: 0.5, invert: false, desc: 'Evolutionary rate profiling'},
-    {name: 'CADD', key: 'cadd_c', threshold: 0.333, invert: false, desc: 'Combined annotation-dependent depletion'},
-    {name: 'AlphaMissense', key: 'alphamissense_c', threshold: 0.564, invert: false, desc: 'Deep learning missense predictor'},
-    {name: 'REVEL', key: 'revel_c', threshold: 0.5, invert: false, desc: 'Rare exome variant ensemble'},
-    {name: '1 \u2212 SIFT', key: 'sift_c', threshold: 0.05, invert: true, desc: 'Sequence homology tolerance (inverted)'},
-    {name: 'PolyPhen-2', key: 'polyphen_c', threshold: 0.85, invert: false, desc: 'Structure-based damage prediction'},
-    {name: 'EVE', key: 'eve_c', threshold: 0.5, invert: false, desc: 'Evolutionary model of variant effect'},
-    {name: 'SpliceAI', key: 'spliceai_max_c', threshold: 0.2, invert: false, desc: 'Splice disruption predictor'},
-  ];
+  const headsConfig = $derived(g.heads?.heads ?? {});
 
-  const gt = $derived(v.gt || {});
-  const effLookup = $derived(v.effect || {});
+  const predRows = $derived.by(() => {
+    const rows: Array<{key: string; name: string; rawVal: number; displayVal: number; color: string; damaging: boolean; isProbe: boolean; isEvo2: boolean}> = [];
 
-  const predRows = $derived(predictors.map(p => {
-    const dbVal = gt[p.key];
-    const probeVal = effLookup[p.key];
-    if (dbVal == null && probeVal == null) return null;
-    const primary = dbVal ?? probeVal;
-    const damaging = p.invert ? primary < p.threshold : primary > p.threshold;
-    return { ...p, db: dbVal, probe: probeVal, primary, damaging };
-  }).filter(Boolean) as Array<{name: string; key: string; threshold: number; invert: boolean; desc: string; db: number | undefined; probe: number | undefined; primary: number; damaging: boolean}>);
+    rows.push({
+      key: '_pathogenic',
+      name: 'Evo2 Pathogenicity',
+      rawVal: v.score_pathogenic,
+      displayVal: v.score_pathogenic,
+      color: tierColor(v.score_pathogenic, false),
+      damaging: v.score_pathogenic > 0.5,
+      isProbe: false,
+      isEvo2: true,
+    });
+
+    for (const [key, info] of Object.entries(headsConfig)) {
+      if (!info.predictor) continue;
+      const p = info.predictor;
+      const dbVal = (v.gt ?? {})[key];
+      const probeEffect = (v.effect ?? {})[key];
+      const probeVal = probeEffect?.value;
+      if (dbVal == null && probeVal == null) continue;
+      const primary = dbVal ?? probeVal;
+      const invert = p.invert ?? false;
+      const displayVal = invert ? 1 - primary : primary;
+      const damaging = invert ? primary < p.threshold : primary > p.threshold;
+      rows.push({
+        key,
+        name: p.display ?? info.display ?? key,
+        rawVal: primary,
+        displayVal,
+        color: tierColor(primary, invert),
+        damaging,
+        isProbe: dbVal == null,
+        isEvo2: false,
+      });
+    }
+
+    return rows.sort((a, b) => {
+      if (a.isEvo2) return -1;
+      if (b.isEvo2) return 1;
+      return (headsConfig[a.key]?.predictor?.order ?? 99) - (headsConfig[b.key]?.predictor?.order ?? 99);
+    });
+  });
 
   const nDam = $derived(predRows.filter(r => r.damaging).length);
-  const consensus = $derived(nDam > predRows.length / 2 ? 'deleterious' : 'benign');
+  const distributions = $derived(g.distributions ?? {});
+  let expandedKey = $state<string | null>(null);
+
+  function getHist(key: string) {
+    const distKey = key === '_pathogenic' ? 'pathogenic' : key;
+    const d = distributions[distKey];
+    if (!d) return null;
+    if (d.benign) return d;           // effect head — direct 1D histogram
+    if (d.gt_hist) return d.gt_hist;  // disruption head — gt annotation histogram
+    return null;
+  }
+
+  function toggle(key: string) {
+    expandedKey = expandedKey === key ? null : (getHist(key) ? key : null);
+  }
 </script>
 
 {#if predRows.length > 1}
   <div class="card">
-    <button class="card-help-btn" onclick={() => showHelp = !showHelp}>?</button>
-    {#if showHelp}
-      <div class="card-help open">
-        <div class="card-help-inner">
-          <b>Computational Predictors.</b> Scores from established clinical variant assessment tools.
-          Values with * are Evo2's internal predictions.
-        </div>
+    <div class="header-row">
+      <div class="title-cell">
+        <span class="section-title" style="margin:0">Computational Predictors</span>
+        <button class="help-btn" onclick={() => showHelp = !showHelp}>?</button>
       </div>
-    {/if}
+      <div class="legend-cell">
+        <span class="ll">benign</span>
+        <Swatch color="#27a" label="Benign" /><Swatch color="#6ac" label="Leaning benign" /><Swatch color="#bbb" label="Neutral" /><Swatch color="#d88" label="Leaning pathogenic" /><Swatch color="#c55" label="Pathogenic" />
+        <span class="ll">pathogenic</span>
+      </div>
+      <div></div>
+    </div>
 
-    <div class="section-title">Computational Predictors</div>
+    <div class="help-panel" class:open={showHelp}>
+      <div class="help-panel-inner">
+        Evo2 Pathogenicity is our probe's prediction. Other scores are from established tools. Values with * are Evo2's internal predictions. Click any row to see the distribution.
+      </div>
+    </div>
 
     {#each predRows as r}
-      {@const displayVal = r.invert ? 1 - r.primary : r.primary}
-      {@const color = tierColor(r.primary, r.invert)}
-      {@const src = r.db != null ? '' : '*'}
-      <div class="profile-row">
-        <div class="profile-label">{r.name}</div>
-        <div class="profile-bar-container">
-          <div class="profile-bar" style="width:{Math.max(2, displayVal * 100)}%;background:{color}"></div>
-        </div>
-        <div class="profile-value" style="color:{color};font-weight:600;text-align:left">
-          {displayVal.toFixed(2)}{#if src}<sup style="font-size:8px;color:var(--text-muted)">{src}</sup>{/if}
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div onclick={() => toggle(r.key)} style="cursor:pointer">
+        <div class="profile-row">
+          <div class="profile-label">
+            {r.name}
+            {#if r.isEvo2}<span style="font-size:9px;color:var(--accent);margin-left:3px">ours</span>{/if}
+          </div>
+          <div class="profile-bar-container">
+            <div class="profile-bar" style="width:{Math.max(2, r.displayVal * 100)}%;background:{r.color}"></div>
+          </div>
+          <div class="profile-value" style="color:{r.color};font-weight:600">
+            {(r.displayVal * 100).toFixed(0)}%{#if r.isProbe}<sup style="font-size:8px;color:var(--text-muted)">*</sup>{/if}
+          </div>
         </div>
       </div>
+
+      {#if expandedKey === r.key}
+        {@const hist = getHist(r.key)}
+        {#if hist}
+          <div class="hist-row">
+            <div></div>
+            <div><HeadHistogram histogram={hist} variantValue={r.rawVal} headName={r.name} /></div>
+            <div></div>
+          </div>
+        {/if}
+      {/if}
     {/each}
 
     <div style="font-size:11px;color:var(--text-muted);margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
-      Consensus: <b>{nDam}/{predRows.length}</b> {consensus}
-      {nDam > predRows.length / 2 ? '(supports PP3)' : '(supports BP4)'}
-      {#if predRows.some(r => r.db == null)}
+      Consensus: <b>{nDam}/{predRows.length}</b> {nDam > predRows.length / 2 ? 'deleterious (supports PP3)' : 'benign (supports BP4)'}
+      {#if predRows.some(r => r.isProbe)}
         <br>* predicted by Evo2 (no database value available)
       {/if}
     </div>
   </div>
 {/if}
+
+<style>
+  .header-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 160px) 1fr 45px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .title-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    position: relative;
+    z-index: 1;
+  }
+  .legend-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+  }
+  .ll { font-size: 9px; color: var(--text-muted); }
+  .hist-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 160px) 1fr 45px;
+    gap: 8px;
+  }
+</style>

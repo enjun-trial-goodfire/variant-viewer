@@ -20,7 +20,7 @@
   function getColors(umapData: UmapData, umapMode: string) {
     const { score, labels } = umapData;
     const lc: Record<string, number[]> = {
-      pathogenic: [.80,.33,.33,.8], likely_pathogenic: [.86,.54,.28,.8],
+      pathogenic: [.80,.33,.33,.8], likely_pathogenic: [.85,.53,.53,.8],
       benign: [.13,.47,.67,.8], likely_benign: [.42,.67,.80,.8], VUS: [.63,.63,.63,.4]
     };
     if (umapMode === 'labeled') return labels.map(l => lc[LABEL_NAMES[l] || 'VUS'] || lc.VUS);

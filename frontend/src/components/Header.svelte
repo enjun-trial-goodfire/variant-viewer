@@ -1,16 +1,12 @@
 <script lang="ts">
   import { search } from '../lib/api';
-  import { humanConsequence, truncate, LABEL_DISPLAY } from '../lib/helpers';
+  import { truncate, navigate } from '../lib/helpers';
   import type { SearchResult } from '../lib/types';
 
   let query = $state('');
   let results = $state<SearchResult[]>([]);
   let showResults = $state(false);
   let searchTimeout: ReturnType<typeof setTimeout>;
-
-  function navigate(path: string) {
-    location.hash = path ? `#/${path}` : '#/';
-  }
 
   function onInput() {
     clearTimeout(searchTimeout);
@@ -70,7 +66,7 @@
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div class="search-item" role="button" tabindex="0" onclick={() => { showResults = false; navigate(`variant/${r.v}`); }}>
               <span class="vid" title={r.v}>{truncate(r.v)}</span>
-              <span class="meta">{humanConsequence(r.c)} · {LABEL_DISPLAY[r.l] || r.l}</span>
+              <span class="meta">{r.c} · {r.l}</span>
             </div>
           {/each}
         {/if}
@@ -85,13 +81,12 @@
 
 <style>
   .header {
-    background: color-mix(in srgb, var(--bg-card) 82%, transparent);
-    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    background: var(--bg-card);
     border-bottom: 1px solid var(--border);
     padding: 12px 24px; display: flex; align-items: center; gap: 16px;
     position: sticky; top: 0; z-index: 100;
   }
-  h1 { font-size: 16px; font-weight: 600; white-space: nowrap;
+  h1 { font-size: 20px; font-weight: 600; white-space: nowrap;
     transition: color 0.15s; }
   h1:hover { color: var(--accent); }
   input { width: 100%; padding: 8px 14px;
@@ -102,14 +97,14 @@
     box-shadow: 0 0 0 3px var(--accent-light); }
   .search-container { flex: 1; max-width: 560px; margin: 0 auto; position: relative; }
   .header-branding { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-  .header-branding img { height: 20px; }
+  .header-branding img { height: 24px; }
   .search-results { position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-card);
     border: 1px solid var(--border); border-radius: var(--radius); margin-top: 4px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.08); z-index: 200; max-height: 400px; overflow-y: auto; }
   .search-results:not(.visible) { display: none; }
   .search-item { padding: 8px 14px; cursor: pointer; display: flex; justify-content: space-between;
     align-items: center; transition: background 0.1s; }
-  .search-item:hover { background: #f8f4ee; }
+  .search-item:hover { background: var(--bg-hover); }
   .search-item .vid { font-family: monospace; font-size: 12px; }
   .search-item .meta { font-size: 11px; color: var(--text-muted); }
 </style>

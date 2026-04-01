@@ -287,7 +287,7 @@
       "display": "CADD (whole-genome)",
       "group": "Clinical",
       "exclude_from_attribution": true,
-      "show_in_predictors_card": true
+      "exclude_from_effect_expansion": true
     },
     "charge_altering": {
       "group": "Variant Effect",
