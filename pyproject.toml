@@ -27,6 +27,7 @@ dependencies = [
     "uvicorn[standard]",
     "duckdb>=1.2",
     "pyarrow>=23.0.1",
+    "anthropic",
 ]
 
 [project.scripts]
@@ -36,13 +37,11 @@ vv = "cli:app"
 dev = ["pytest>=9.0", "ruff>=0.15"]
 
 [project.optional-dependencies]
-interpret = ["anthropic"]
-serve = ["anthropic"]
 train = ["wandb>=0.23"]
 
 [tool.setuptools]
 packages = ["probe", "pipeline"]
-py-modules = ["cli", "build", "serve", "db", "constants", "display", "paths", "loaders", "prompts", "attribution", "training"]
+py-modules = ["cli", "build", "serve", "db", "transform", "constants", "display", "paths", "loaders", "prompts", "attribution", "training"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

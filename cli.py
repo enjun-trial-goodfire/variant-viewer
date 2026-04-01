@@ -48,17 +48,30 @@ def check(probe: str = typer.Argument("probe_v11", help="Probe name")):
 
 
 @app.command()
+def transform(
+    probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
+    output: Path = typer.Option(Path("builds/clean.parquet"), help="Output parquet path"),
+    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants"),
+):
+    """Transform raw scores + metadata into clean parquet for the frontend."""
+    from transform import main as _transform
+
+    _transform(probe=probe, output=output, dev=dev)
+    rprint(f"[green]Transformed:[/] {output}")
+
+
+@app.command()
 def build(
     probe: str = typer.Option("probe_v11", help="Probe name (e.g. probe_v11)"),
+    parquet: Path = typer.Option(Path("builds/clean.parquet"), help="Input parquet from transform step"),
     umap: bool = typer.Option(False, help="Compute UMAP embedding (~40s)"),
     neighbors: bool = typer.Option(False, help="Compute nearest neighbors (GPU)"),
     db: Path = typer.Option(Path("builds/variants.duckdb"), help="Output DuckDB path"),
-    dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants"),
 ):
-    """Build the variant viewer DuckDB database."""
+    """Build the variant viewer DuckDB database from a clean parquet."""
     from build import main as _build
 
-    result = _build(db_path=db, umap=umap, neighbors=neighbors, probe=probe, dev=dev)
+    result = _build(parquet=parquet, db_path=db, umap=umap, neighbors=neighbors, probe=probe)
     rprint(f"[green]Built:[/] {result}")
 
 

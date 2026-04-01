@@ -1,8 +1,7 @@
 """DuckDB-backed API server for the variant viewer.
 
-Returns flat rows from DuckDB as-is. The frontend derives structure
-(disruption/effect/gt grouping, attribution, z-scores) from column
-naming conventions + heads.json.
+The DB schema matches the frontend Variant type exactly (finalize_schema
+runs at build time). The server is a thin query proxy — no transformation.
 
 Usage:
     ANTHROPIC_API_KEY=... uv run vv serve [--db builds/variants.duckdb] [--port 8501]
@@ -10,7 +9,6 @@ Usage:
 
 import asyncio
 import json
-import math
 import os
 import time
 from pathlib import Path
@@ -23,6 +21,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
+import anthropic
 
 from prompts import SYSTEM_PROMPT, build_prompt
 
@@ -48,17 +48,17 @@ def _flat_to_prompt_dict(flat: dict, heads_config: dict) -> dict:
                 effect[h] = val
 
     return {
-        "id": flat.get("variant_id", ""),
-        "gene": flat.get("gene_name", ""),
-        "score": flat.get("score_pathogenic", 0),
+        "id": flat.get("id", ""),
+        "gene": flat.get("gene", ""),
+        "score": flat.get("score", 0),
         "consequence": flat.get("consequence", ""),
         "substitution": flat.get("substitution", ""),
-        "hgvsc": flat.get("vep_hgvsc", ""),
-        "hgvsp": flat.get("vep_hgvsp", ""),
+        "hgvsc": flat.get("hgvsc", ""),
+        "hgvsp": flat.get("hgvsp", ""),
         "label": flat.get("label", ""),
         "disruption": disruption,
         "effect": effect,
-        "neighbors": json.loads(flat["neighbors"]) if "neighbors" in flat and isinstance(flat["neighbors"], str) else [],
+        "neighbors": json.loads(flat["neighbors"]) if isinstance(flat.get("neighbors"), str) else flat.get("neighbors", []),
     }
 
 # Load .env if present (for ANTHROPIC_API_KEY)
@@ -93,21 +93,14 @@ async def umap_endpoint(request):
 
 
 async def variant_endpoint(request):
-    """GET /api/variants/{id} — flat row, no reconstruction."""
+    """GET /api/variants/{id} — flat row as-is."""
     vid = request.path_params["variant_id"]
     cur = request.app.state.db.cursor()
-    row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
+    row = cur.execute("SELECT * FROM variants WHERE id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
-    result = {}
-    for col, val in zip(columns, row):
-        if val is None:
-            continue
-        if isinstance(val, float) and math.isnan(val):
-            continue
-        result[col] = val
-    return JSONResponse(result)
+    return JSONResponse({col: val for col, val in zip(columns, row) if val is not None})
 
 
 async def search_endpoint(request):
@@ -117,23 +110,20 @@ async def search_endpoint(request):
         return JSONResponse([])
 
     cur = request.app.state.db.cursor()
-
-    # Exact gene match first
     results = cur.execute(
-        "SELECT variant_id, label, score_pathogenic, consequence FROM variants "
-        "WHERE upper(gene_name) = ? ORDER BY score_pathogenic DESC LIMIT 30",
+        "SELECT id, label, score, consequence FROM variants "
+        "WHERE upper(gene) = ? ORDER BY score DESC LIMIT 30",
         [q],
     ).fetchall()
 
-    # Prefix match if we need more
     if len(results) < 30:
-        prefix_results = cur.execute(
-            "SELECT variant_id, label, score_pathogenic, consequence FROM variants "
-            "WHERE upper(gene_name) LIKE ? AND upper(gene_name) != ? "
-            "ORDER BY score_pathogenic DESC LIMIT ?",
+        more = cur.execute(
+            "SELECT id, label, score, consequence FROM variants "
+            "WHERE upper(gene) LIKE ? AND upper(gene) != ? "
+            "ORDER BY score DESC LIMIT ?",
             [f"{q}%", q, 30 - len(results)],
         ).fetchall()
-        results.extend(prefix_results)
+        results.extend(more)
 
     return JSONResponse([
         {"v": r[0], "l": r[1], "s": r[2], "c": r[3]} for r in results
@@ -176,7 +166,7 @@ async def interpret_endpoint(request):
         return JSONResponse({"status": "unavailable", "error": "ANTHROPIC_API_KEY not set"}, status_code=503)
 
     # 3. Load variant (flat row → adapt for prompt builder)
-    row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
+    row = cur.execute("SELECT * FROM variants WHERE id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"status": "not_found", "error": f"Variant {vid} not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
@@ -199,8 +189,6 @@ async def interpret_endpoint(request):
             return JSONResponse(result)
 
         try:
-            import anthropic
-
             prompt = build_prompt(variant)
             logger.info(f"Generating interpretation for {vid}...")
 
