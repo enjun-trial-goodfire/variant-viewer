@@ -63,17 +63,19 @@
   const distributions = $derived(g.distributions ?? {});
   let expandedKey = $state<string | null>(null);
 
-  function getHist(key: string) {
+  function getHist(key: string, invert: boolean) {
     const distKey = key === '_pathogenic' ? 'pathogenic' : key;
     const d = distributions[distKey];
     if (!d) return null;
-    if (d.benign) return d;           // effect head — direct 1D histogram
-    if (d.gt_hist) return d.gt_hist;  // disruption head — gt annotation histogram
-    return null;
+    const hist = d.benign ? d : d.gt_hist ?? null;
+    if (!hist) return null;
+    if (!invert) return hist;
+    // Flip the histogram for inverted predictors (e.g. SIFT → 1-SIFT)
+    return { ...hist, benign: [...hist.benign].reverse(), pathogenic: [...hist.pathogenic].reverse() };
   }
 
-  function toggle(key: string) {
-    expandedKey = expandedKey === key ? null : (getHist(key) ? key : null);
+  function toggle(key: string, invert: boolean) {
+    expandedKey = expandedKey === key ? null : (getHist(key, invert) ? key : null);
   }
 </script>
 
@@ -100,7 +102,7 @@
 
     {#each predRows as r}
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div onclick={() => toggle(r.key)} style="cursor:pointer">
+      <div onclick={() => toggle(r.key, headsConfig[r.key]?.predictor?.invert ?? false)} style="cursor:pointer">
         <div class="profile-row">
           <div class="profile-label">
             {r.name}
@@ -116,11 +118,11 @@
       </div>
 
       {#if expandedKey === r.key}
-        {@const hist = getHist(r.key)}
+        {@const hist = getHist(r.key, headsConfig[r.key]?.predictor?.invert ?? false)}
         {#if hist}
           <div class="hist-row">
             <div></div>
-            <div><HeadHistogram histogram={hist} variantValue={r.rawVal} headName={r.name} /></div>
+            <div><HeadHistogram histogram={hist} variantValue={headsConfig[r.key]?.predictor?.invert ? r.displayVal : r.rawVal} headName={r.name} /></div>
             <div></div>
           </div>
         {/if}
