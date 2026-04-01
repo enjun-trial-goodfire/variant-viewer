@@ -117,14 +117,20 @@ def main():
         print(f"Not found: {args.parquet}")
         sys.exit(1)
 
-    # Read parquet
+    # Read parquet — stream rows to avoid materializing all dicts in memory
     print(f"Reading {args.parquet}...")
     df = pl.read_parquet(args.parquet)
     if args.limit:
         df = df.head(args.limit)
-    rows = df.to_dicts()
-    total = len(rows)
+    total = df.height
     print(f"  {total:,} variants, {df.width} columns")
+    print("  Converting to dicts (streaming in chunks)...")
+    BATCH = 5000
+    rows = []
+    for start in range(0, total, BATCH):
+        chunk = df.slice(start, BATCH).to_dicts()
+        rows.extend(chunk)
+    print(f"  Done ({len(rows):,} rows)")
 
     # Connect
     import boto3

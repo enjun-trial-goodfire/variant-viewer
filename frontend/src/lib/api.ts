@@ -1,14 +1,25 @@
 import type { GlobalData, Interpretation, SearchResult, UmapData, Variant } from './types';
 
-const API_BASE = (window as any).__APP_CONFIG__?.API_BASE || '';
+declare global {
+  interface Window { __APP_CONFIG__?: { API_BASE?: string }; }
+}
+
+// In production: API_BASE points to API Gateway. Static assets served from same S3 origin.
+// In dev: everything is /api/* via local serve.py.
+const API_BASE = window.__APP_CONFIG__?.API_BASE || '';
+
+function api(path: string): string {
+  return API_BASE ? `${API_BASE}${path}` : `/api${path}`;
+}
 
 export async function getGlobal(): Promise<GlobalData> {
   if (API_BASE) {
-    const [heads, distributions] = await Promise.all([
+    // Production: static JSON files on S3
+    const [heads, dist] = await Promise.all([
       fetch('/heads.json').then(r => r.json()),
       fetch('/statistics.json').then(r => r.json()),
     ]);
-    return { heads, distributions };
+    return { heads, distributions: dist };
   }
   return (await fetch('/api/global')).json();
 }
@@ -22,12 +33,8 @@ export async function getUmap(): Promise<UmapData | null> {
   return resp.ok ? resp.json() : null;
 }
 
-function apiUrl(path: string): string {
-  return API_BASE ? `${API_BASE}${path}` : `/api${path}`;
-}
-
 export async function getVariant(id: string): Promise<Variant> {
-  const resp = await fetch(apiUrl(`/variants/${encodeURIComponent(id)}`));
+  const resp = await fetch(api(`/variants/${encodeURIComponent(id)}`));
   if (!resp.ok) throw new Error(`Variant not found: ${id}`);
   return normalizeVariant(await resp.json());
 }
@@ -35,7 +42,7 @@ export async function getVariant(id: string): Promise<Variant> {
 export async function search(query: string): Promise<SearchResult[]> {
   const q = query.trim();
   if (q.length < 2) return [];
-  const resp = await fetch(apiUrl(`/variants/search?q=${encodeURIComponent(q)}`));
+  const resp = await fetch(api(`/variants/search?q=${encodeURIComponent(q)}`));
   return resp.ok ? resp.json() : [];
 }
 
@@ -46,9 +53,7 @@ export function fetchInterpretation(
   onLoading: () => void,
   onError: () => void,
 ): void {
-  const url = API_BASE
-    ? `${API_BASE}/variants/${encodeURIComponent(variantId)}/analysis`
-    : `/api/interpret/${encodeURIComponent(variantId)}`;
+  const url = api(`/variants/${encodeURIComponent(variantId)}/analysis`);
   onLoading();
   let attempt = 0;
   function poll() {
@@ -59,13 +64,9 @@ export function fetchInterpretation(
         if (signal.aborted) return;
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json().then((data: any) => {
-          // Dev server returns {status: "ok", ...} directly.
-          // Lambda returns {status: "complete", result: {status: "ok", ...}}.
-          if (data?.status === 'ok') onResult(data);
-          else if (data?.status === 'complete' && data.result) onResult(data.result);
-          else if (data?.status === 'processing' || data?.status === 'queued') {
-            if (attempt < 20) setTimeout(poll, Math.min(2000 * 1.5 ** (attempt - 1), 30000));
-            else onError();
+          if (data?.status === 'ok' || data?.result) onResult(data.result || data);
+          else if ((data?.status === 'processing' || data?.processing_status === 'processing') && attempt < 20) {
+            setTimeout(poll, Math.min(2000 * 1.5 ** (attempt - 1), 30000));
           } else onError();
         });
       })
@@ -75,14 +76,6 @@ export function fetchInterpretation(
 }
 
 // ── Flat row → Variant ──────────────────────────────────────────────
-//
-// The DB stores precomputed per-variant-per-head values:
-//   ref_score_{h}, var_score_{h}  → disruption ref/var
-//   z_{h}                         → precomputed z-score
-//   ref_lr_{h}, var_lr_{h}        → precomputed likelihood ratios
-//   score_{h}                     → effect value
-//   lr_{h}                        → precomputed effect likelihood ratio
-//   gt_{h}                        → ground truth
 
 const JSON_FIELDS = new Set(['acmg', 'clinical_features', 'submitters', 'domains', 'neighbors', 'attribution']);
 const GNOMAD_POP_COLS = new Set(['gnomad_afr_af', 'gnomad_amr_af', 'gnomad_asj_af', 'gnomad_eas_af', 'gnomad_fin_af', 'gnomad_nfe_af', 'gnomad_sas_af']);
@@ -94,7 +87,6 @@ function normalizeVariant(row: Record<string, any>): Variant {
   const gnomad_pop: Record<string, number> = {};
   const meta: Record<string, any> = {};
 
-  // First pass: collect ref_score values to know which disruption heads exist
   for (const [k, v] of Object.entries(row)) {
     if (v == null) continue;
     if (k.startsWith('ref_score_')) {
@@ -108,7 +100,7 @@ function normalizeVariant(row: Record<string, any>): Variant {
           var_lr: row[`var_lr_${h}`] ?? 0.5,
         };
       }
-    } else if (k.startsWith('score_') && k !== 'score_pathogenic') {
+    } else if (k.startsWith('score_')) {
       const h = k.slice(6);
       effect[h] = { value: v, lr: row[`lr_${h}`] ?? 0.5 };
     } else if (k.startsWith('gt_')) {

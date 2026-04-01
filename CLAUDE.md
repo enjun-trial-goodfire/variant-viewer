@@ -1,83 +1,110 @@
-# variant-viewer
+# variant-viewer (EVEE)
 
-Full pipeline for Evo2 ClinVar variant effect prediction: train, extract, eval, build, serve.
+Evo Variant Effect Explorer. Svelte 5 + DuckDB web app for visualizing Evo2 ClinVar probe predictions.
 
-## CLI
+## Quick start
 
 ```bash
-uv run vv train pretrain-cmd --gpus 4        # probe training (SLURM + torchrun)
-uv run vv extract --probe $P --activations $A  # extract scores (8 GPU shards)
-uv run vv eval $ACTS/probe_v10               # per-head eval → eval.json
-uv run vv log-eval $ACTS/probe_v10           # upload to wandb
-uv run vv build --probe probe_v10            # build static site
-uv run vv serve /tmp/variant_viewer_*        # serve with AI interpretation
-uv run vv pipeline $ACTS/probe_v10           # full chain
+uv sync                                          # Python deps
+cd frontend && bun install && cd ..              # JS deps (one-time)
+uv run vv transform --probe probe_v12 --dev 5000 # raw data → clean parquet
+uv run vv build --probe probe_v12 --neighbors    # parquet → DuckDB + neighbors
+bash dev.sh                                      # frontend build + serve + tunnel
 ```
 
 ## Pipeline
 
 ```
-train → extract → finalize → eval → log-eval → build → serve
+transform → build → serve
 ```
 
-All steps are standalone scripts chainable via SLURM `--dependency=afterok`.
-`pipeline/pipeline.sh` chains them automatically.
+- **transform.py**: scores.feather + variants.parquet → `builds/clean.parquet` (renames, quality filter, z-scores, LR, display strings, 2D heatmaps, 1D histograms)
+- **build.py**: clean.parquet → `builds/variants.duckdb` (flat table + indexes + optional neighbors/UMAP)
+- **serve.py**: DuckDB → flat JSON API. No reconstruction, no nesting. Frontend derives structure from column naming conventions + heads.json.
 
-## Probe heads
+## CLI
 
-Two types, defined in `config.json`:
-- **disruption_heads** (~500): scored on ref and var views separately (delta = disruption)
-- **effect_heads** (~200): scored on diff view (variant-level predictions)
-
-Older probes use `ref_heads`/`diff_heads` — code handles both.
+```bash
+uv run vv transform --probe probe_v12 [--dev N]     # raw → clean parquet
+uv run vv build --probe probe_v12 [--neighbors] [--umap]  # parquet → DuckDB
+uv run vv serve [--port 8501]                        # serve API + frontend
+uv run vv eval $ACTS/probe_v12                       # per-head metrics → eval.json
+uv run vv log-eval $ACTS/probe_v12                   # upload to wandb
+uv run vv pipeline $ACTS/probe_v12                   # full SLURM chain
+bash dev.sh --data --dev 5000 --probe probe_v12 --neighbors  # one-click dev rebuild
+```
 
 ## Key files
 
 ```
-cli.py                   Typer CLI: uv run vv <cmd>
-build.py                 Static site generator (--probe flag selects version)
-serve.py                 Dev server + Claude interpretation (loads .env for API key)
-index.html               Single-page frontend (vanilla JS, no build step)
-attribution.py           Z-score attribution with sigmoid-gated delta filtering
-training.py              Gene split, head discovery, head classification
+cli.py                   Typer CLI entry point
+transform.py             Raw data → clean parquet (the big transform)
+build.py                 Clean parquet → DuckDB (insert + indexes + GPU steps)
+serve.py                 Starlette API server (flat rows, no logic)
+db.py                    DuckDB schema + helpers
+heads.json               Head vocabulary: display names, groups, predictor config, quality thresholds
+head_quality.json        Quality-passing head list (from eval pipeline)
 prompts.py               Claude interpretation prompt builder
-probe/covariance.py      MultiHeadCovProbeV2 + focal multihead loss
-pipeline/train.py        Probe training (pretrain + finetune phases, DDP)
-pipeline/train.sh        SLURM wrapper (MASTER_PORT, WANDB_DIR, --frozen)
-pipeline/extract.py      3-view scoring with artifact validation
-pipeline/eval.py         Per-head metrics: AUC, correlation, accuracy
-pipeline/pipeline.sh     End-to-end SLURM chain
-pipeline/interpret.py    Batch Claude interpretation (cost-guarded >20 variants)
-pipeline/ref_labels.py   Token label lookup for SAE pretraining
+constants.py             Probe name, calibration, consequence/AA classes
+
+frontend/                Svelte 5 + Vite + Bun + ECharts
+  src/App.svelte         Router (hash-based: #/ and #/variant/{id})
+  src/lib/api.ts         API calls + normalizeVariant (flat row → typed Variant)
+  src/lib/types.ts       TypeScript interfaces
+  src/components/        All UI components (cards, rows, charts)
+
+pipeline/                SLURM training/extraction pipeline
+  train.py               Probe training (DDP, focal loss)
+  extract.py             3-view scoring → scores.feather
+  eval.py                Per-head metrics → eval.json
 ```
+
+## Architecture
+
+**Server is a dumb pipe.** `SELECT * FROM variants WHERE variant_id = ?` → flat JSON dict. No nesting, no grouping, no reconstruction.
+
+**Frontend derives everything.** `normalizeVariant()` in `api.ts` groups `ref_score_*`/`var_score_*` into `disruption`, `score_*` into `effect`, `gt_*` into `gt` using column naming conventions. Attribution is computed client-side (sigmoid-gated z-scores). Head metadata (display names, groups, predictor config, eval metrics) comes from `/api/global`.
+
+**Column naming IS the schema:**
+- `ref_score_{head}` / `var_score_{head}` → disruption heads
+- `score_{head}` → effect heads
+- `gt_{head}` → ground truth (database) values
+- `z_{head}` / `ref_lr_{head}` / `var_lr_{head}` / `lr_{head}` → precomputed stats
 
 ## Data
 
-**Local** (`data/` → `~/projects/data/`, symlinked, not in git):
-- `clinvar/deconfounded-full/{metadata,annotations}.feather`
-- `clinvar/vus/metadata.feather`
-- `clinvar/submissions.feather`
-- `gencode/genes.feather`
+**Local** (`data/` → `~/projects/data/`, symlinked):
+- `variants.parquet` (4.2M × 687 cols, ~925MB)
+- `heads.json` (646 head definitions)
 
-**Shared artifacts** (`paths.py:ARTIFACTS`):
-- `clinvar_evo2_deconfounded_full/{probe}/scores.feather`
-- `clinvar_evo2_deconfounded_full/{probe}/embeddings/`
-- `clinvar_evo2_vus/{probe}/scores.feather` (optional, build works without)
+**Artifacts** (`$VV_ARTIFACTS` or `paths.py:ARTIFACTS`):
+- `clinvar_evo2_deconfounded_full/{probe}/scores.feather` (184K × 1201 cols)
+- `clinvar_evo2_deconfounded_full/{probe}/embeddings/` (for neighbors/UMAP)
+- `clinvar_evo2_vus/{probe}/scores.feather` (optional)
+
+**Build outputs** (`builds/`):
+- `clean.parquet` — transformed data ready for DuckDB
+- `variants.duckdb` — serving database (~750MB for 232K variants)
+- `heads.json` — merged head config (vocab + eval + stats)
+- `statistics.json` — distributions + heatmaps
 
 ## Code conventions
 
-- **polars** not pandas, **torch** not numpy, **uv** not pip
-- **orjson** for JSON (speed matters: 232K variant files)
-- **typer** for all CLIs, **wandb** for experiment tracking
-- Probe version is a CLI flag (`--probe probe_v10`), not hardcoded
-- `.env` file for ANTHROPIC_API_KEY (gitignored)
-- SLURM scripts: `set -euo pipefail`, `cd ${SLURM_SUBMIT_DIR}`, `uv run --frozen`
-- Current probe: `probe_v10` (`d_hidden=64, d_probe=128, focal_gamma=3.0`)
+- **polars** not pandas, **torch** not numpy, **uv** not pip, **bun** not npm
+- **orjson** for fast JSON, **DuckDB** for serving
+- **ECharts** for all charts (heatmaps, histograms), no chart.js
+- **Svelte 5 runes**: `$state`, `$derived`, `$derived.by`, `$effect`, `$props`
+- Probe version is a CLI flag, not hardcoded. Current: `probe_v12`
+- `.env` for ANTHROPIC_API_KEY (gitignored)
+- `heads.json` is the single source of truth for head display, grouping, predictor config, quality thresholds
+
+## Current probe
+
+`probe_v12` (d_hidden=64, d_probe=128, focal_gamma=0.0, 1 epoch)
 
 ## wandb
 
 Project: `gfm-probes`. Each probe version has eval metrics:
 ```bash
-uv run vv log-eval $ACTS/probe_v10   # per-head table + summary scalars
+uv run vv log-eval $ACTS/probe_v12
 ```
-Training logs: `loss`, `loss_diff`, `loss_ref`, `grad_norm` per step.

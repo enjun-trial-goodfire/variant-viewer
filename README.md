@@ -2,197 +2,147 @@
 
 Interactive browser for Evo2 ClinVar probe predictions. Visualizes pathogenicity
 scores, disruption/effect profiles, UMAP embeddings, nearest neighbors, AI
-interpretations, and VEP annotations for ~4.2M ClinVar variants.
+interpretations, and VEP annotations for ~232K ClinVar variants.
 
 ## Quick start
 
 ```bash
 # Backend (Python)
 uv sync
-uv run vv check                              # validate all data is present
-uv run vv build                              # build DuckDB (~60s, <1s for writes)
-uv run vv serve                              # serve API + frontend on :8501
 
 # Frontend (Svelte + Vite)
 curl -fsSL https://bun.sh/install | bash     # one-time: install bun
-cd frontend && bun install                   # one-time: install JS deps
-bun run build                                # production build → frontend/dist/
+cd frontend && bun install && cd ..           # one-time: install JS deps
+
+# Build data
+uv run vv transform --probe probe_v12        # raw → clean parquet (~2min)
+uv run vv build --probe probe_v12 --neighbors # parquet → DuckDB (~50s)
+
+# Serve
+bash dev.sh                                   # build frontend + serve + tunnel
 ```
 
 ## Development
 
-Two terminals:
-
 ```bash
-# Terminal 1: Python API server (DuckDB-backed)
-uv run vv serve                              # API on http://localhost:8501
+# Quick iteration (5K variant subset)
+bash dev.sh --data --dev 5000 --probe probe_v12 --neighbors
 
-# Terminal 2: Svelte dev server (hot reload)
-cd frontend && bun run dev                   # Vite on http://localhost:5173
-```
+# Frontend only (data already built)
+bash dev.sh
 
-Vite proxies `/api/*` requests to the Python backend. Edit `.svelte` files and
-see changes instantly in the browser.
-
-## Data
-
-All variant data lives in two files (produced by the annotator's `export_for_viewer.py`):
-
-```
-data/
-├── variants.parquet     # 4.2M ClinVar variants, 687 cols, ~925 MB
-├── labeled.parquet      # 1.53M pathogenic/benign (stars ≥ 1), subset of variants.parquet
-├── unlabeled.parquet    # 2.71M VUS/conflicting/other, subset of variants.parquet
-└── heads.json           # 646 probe head definitions (specs + display names + categories)
-```
-
-Each parquet contains ALL data pre-joined: variant metadata, gene info, VEP annotations
-(HGVS, domains, impact), gnomAD frequencies, ClinVar submissions (ACMG, submitters),
-LOEUF constraint, and 646 training label columns. No symlinks, no external data deps.
-
-**To regenerate** (from the annotator repo):
-```bash
-cd ~/projects/annotator
-uv run python scripts/export_for_viewer.py \
-    --output ~/projects/variant-viewer/data \
-    --variant-ann-dir data/annotations_output/genomics_variants/datasources \
-    --vep-cli-dir data
-```
-
-**Shared artifacts** (activations + probe outputs, on cluster):
-```bash
-export VV_ARTIFACTS=/path/to/artifacts  # where clinvar_evo2_deconfounded_full/ lives
-```
-
-```
-$VV_ARTIFACTS/
-├── clinvar_evo2_deconfounded_full/
-│   ├── activations/           # Raw Evo2 activations (2.2TB)
-│   └── probe_v12/             # Trained probe outputs
-│       ├── weights.pt
-│       ├── config.json
-│       ├── scores.feather     # Per-variant scores (from extract)
-│       ├── embeddings/        # Covariance embeddings (for UMAP + neighbors)
-│       ├── split.feather
-│       └── eval.json
-└── clinvar_evo2_vus/          # [optional] VUS activations
-```
-
-## CLI
-
-```bash
-uv run vv build                              # build DuckDB → builds/variants.duckdb
-uv run vv build --umap --neighbors           # build with UMAP + neighbors (needs GPU)
-uv run vv build --dev 100                    # fast dev build (100 variants)
-uv run vv serve                              # serve API from DuckDB + frontend
-uv run vv serve --db path/to/db.duckdb      # serve a specific database
-uv run vv eval $ACTS/probe_v12               # compute per-head metrics → eval.json
-uv run vv log-eval $ACTS/probe_v12           # upload eval.json to wandb
-uv run vv pipeline $ACTS/probe_v12           # full chain: extract → eval → build
+# Two terminals for hot reload
+uv run vv serve --port 8501                   # terminal 1: API
+cd frontend && bun run dev                    # terminal 2: Vite HMR on :5173
 ```
 
 ## Pipeline
 
 ```
-train → extract → finalize → eval → log-eval → build → serve
+scores.feather + variants.parquet
+  → transform (rename, filter, z-scores, stats)
+  → builds/clean.parquet
+  → build (DuckDB insert, neighbors, UMAP)
+  → builds/variants.duckdb
+  → serve (flat JSON API + static frontend)
 ```
 
-Single command (submits SLURM jobs with dependency chains):
+### CLI
+
 ```bash
-uv run vv pipeline $VV_ARTIFACTS/clinvar_evo2_deconfounded_full/probe_v12
+uv run vv transform --probe probe_v12 [--dev N]          # step 1
+uv run vv build --probe probe_v12 [--neighbors] [--umap] # step 2
+uv run vv serve [--port 8501]                             # step 3
+uv run vv eval $ACTS/probe_v12                            # eval metrics
+uv run vv log-eval $ACTS/probe_v12                        # upload to wandb
+uv run vv pipeline $ACTS/probe_v12                        # full SLURM chain
 ```
-
-Train a new probe:
-```bash
-sbatch --gpus=4 pipeline/train.sh --name probe_v12 --focal-gamma 0.5
-```
-
-## Probe heads
-
-646 heads in two categories (defined in `data/heads.json`):
-
-- **Disruption** (443): Scored on ref view. Delta (var - ref) shows what the mutation
-  disrupted. Examples: helix structure, domain membership, ChIP-seq peaks, conservation.
-
-- **Effect** (203): Scored on diff view (var - ref activations). Predict variant-level
-  properties. Examples: pathogenicity, CADD, AlphaMissense, SpliceAI, Pfam domains.
 
 ## Architecture
 
 | File | Role |
 |------|------|
-| `cli.py` | Typer CLI entry point (`uv run vv <cmd>`) |
-| `build.py` | Build pipeline: variants.parquet + scores → DuckDB |
-| `db.py` | DuckDB schema, row/dict conversion helpers |
-| `serve.py` | DuckDB-backed API server + frontend static serving |
-| `frontend/` | Svelte 5 + Vite + TypeScript frontend |
-| `attribution.py` | Z-score disruption attribution |
+| `transform.py` | Raw data → clean parquet (the single transform step) |
+| `build.py` | Clean parquet → DuckDB (flat insert + GPU neighbors/UMAP) |
+| `serve.py` | DuckDB → flat JSON API (no reconstruction, no nesting) |
+| `db.py` | DuckDB schema + connection helpers |
+| `heads.json` | Head vocabulary: display names, groups, predictor config |
+| `head_quality.json` | Quality-filtered head list |
 | `prompts.py` | Claude interpretation prompt builder |
-| `display.py` | Head display names, curation, quality filtering |
-| `constants.py` | Probe name, model config, consequence classes, calibration |
-| `loaders.py` | `load_variants()` + `load_heads()` |
-| `paths.py` | `VV_ARTIFACTS` env var, path constants |
-| `training.py` | `gene_split()`, `load_head_specs()` |
-| `probe/covariance.py` | MultiHeadCovProbeV2 + focal multihead loss |
-| `pipeline/train.py` | Dual-pass probe training (DDP, focal loss) |
-| `pipeline/extract.py` | 3-view scoring: activations → embeddings + scores |
-| `pipeline/eval.py` | Per-head eval: AUC, correlation → eval.json |
-| `pipeline/interpret.py` | Batch Claude interpretation |
+| `frontend/` | Svelte 5 + Vite + ECharts |
 
 ### Frontend components
 
 ```
 frontend/src/
-  App.svelte                  # Hash router + layout
+  App.svelte                  # Hash router (#/ landing, #/variant/{id})
   components/
-    Header.svelte             # Search bar + branding
-    LandingPage.svelte        # UMAP scatter + description
-    VariantPage.svelte        # Loads variant, orchestrates cards
+    Header.svelte             # Search + branding
+    LandingPage.svelte        # UMAP scatter
+    VariantPage.svelte        # Orchestrates variant cards
+    DisruptionRow.svelte      # Disruption bar + expandable heatmap
+    EffectRow.svelte           # Effect bar + expandable histogram
+    HeadHeatmap.svelte        # ECharts 2D ref×var heatmap
+    HeadHistogram.svelte      # ECharts 1D distribution histogram
     cards/
-      VerdictCard.svelte      # Gene, coordinates, score, ClinVar metadata
-      InterpretationCard.svelte  # AI interpretation (on-demand)
-      DisruptionCard.svelte   # Top disruptions + all disruptions + effects
-      PredictorsCard.svelte   # Computational predictors
+      VerdictCard.svelte      # Gene, coords, score, ClinVar metadata
+      InterpretationCard.svelte  # AI interpretation
+      DisruptionCard.svelte   # Top disruptions + all disruptions
+      PredictorsCard.svelte   # Computational predictors (10 tools)
       NeighborsCard.svelte    # Nearest neighbors table
-      DistributionCard.svelte # Score distribution histogram
       PopulationCard.svelte   # gnomAD population frequencies
   lib/
-    api.ts                    # Dual-mode fetch (local DuckDB vs deployed DynamoDB)
+    api.ts                    # Fetch + normalizeVariant (flat → typed)
     types.ts                  # TypeScript interfaces
-    stores.ts                 # Svelte stores
-    helpers.ts                # Display helpers
     colors.ts                 # Color utilities
+    helpers.ts                # Display helpers
+```
+
+## Data
+
+All variant data in two files (from the annotator repo):
+
+```
+data/
+├── variants.parquet     # 4.2M ClinVar variants, 687 cols, ~925 MB
+└── heads.json           # 646 probe head definitions
+```
+
+Shared artifacts (on cluster):
+```
+$VV_ARTIFACTS/
+├── clinvar_evo2_deconfounded_full/
+│   └── probe_v12/
+│       ├── scores.feather     # 184K × 1201 cols
+│       ├── embeddings/        # for neighbors + UMAP
+│       ├── config.json
+│       └── eval.json
+└── clinvar_evo2_vus/          # optional VUS scores
 ```
 
 ## Deployment
 
 ### Local (DuckDB)
 ```bash
-uv run vv build && cd frontend && bun run build && cd .. && uv run vv serve
+bash dev.sh --data --probe probe_v12 --neighbors
 ```
 
 ### AWS (DynamoDB + CloudFront)
-See `terraform/` for infrastructure. The frontend detects `CONFIG.API_BASE`
-(set via `config.js` in S3) to switch between local and deployed mode.
+See `terraform/` for infrastructure. Frontend detects `API_BASE` via `config.js`.
 
-## Transfer to new server
+## Performance
 
-```bash
-# Copy data files (only ~1GB)
-scp data/{labeled,unlabeled,variants}.parquet data/heads.json newserver:variant-viewer/data/
-
-# Clone goodfire-core alongside
-git clone goodfire-core ../goodfire-core
-
-# Set artifacts path and run
-export VV_ARTIFACTS=/path/to/activations
-uv sync
-uv run vv pipeline $VV_ARTIFACTS/probe_v12
-```
+| Metric | Value |
+|--------|-------|
+| Transform | ~2 min (232K variants) |
+| Build + neighbors | ~50s (GPU) |
+| DB size | 746 MB |
+| Variant lookup | ~30ms |
+| Gene search | ~8ms |
+| Global config | ~7ms |
 
 ## wandb
 
-Every probe version has eval metrics in wandb (`gfm-probes` project):
 ```bash
 uv run vv log-eval $VV_ARTIFACTS/clinvar_evo2_deconfounded_full/probe_v12
 ```
