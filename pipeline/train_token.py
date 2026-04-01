@@ -195,7 +195,7 @@ def main(
     d_probe: int = typer.Option(128),
     epochs: int = typer.Option(1),
     lr: float = typer.Option(0.01),
-    batch_size: int = typer.Option(256),
+    batch_size: int = typer.Option(64, help="Total variants per step (8 per GPU × 8 GPUs; each variant = 512 tokens)"),
     focal_gamma: float = typer.Option(0.0),
     seed: int = typer.Option(42),
 ) -> None:
