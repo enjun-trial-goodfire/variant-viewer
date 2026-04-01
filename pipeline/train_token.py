@@ -1,12 +1,22 @@
-"""Train per-token reference probe by co-iterating activations + token_labels.
+"""Train per-token binary probe on reference activations.
 
-Streams activations and pre-generated token_labels chunk by chunk (same chunk
-boundaries, same sequence IDs). Each variant's [2, 3, 256, 4096] activation
-tensor is unpacked to [256, 8192] per-token vectors. Labels come from the
-aligned token_labels dataset [443, 256] per variant.
+Each of the 512 positions per variant (256 downstream + 256 upstream) has
+position-specific binary annotations (ATAC-seq, ChIP-seq, cCREs, etc.).
+The probe predicts these from individual token activations.
 
-Only disruption (reference) heads. Probe with n_sqrtm_iters=0 (bilinear).
-Summing token logits at inference = sequence-level prediction (linearity).
+Activation layout: [B, direction=2, view=3, K=256, d=4096]
+  ref_same  (view 1) = reference on the selecting strand
+  ref_cross (view 2) = reference on the OPPOSITE strand (same positions!)
+
+Token unpacking: for each direction's 256 positions, cat ref_same + ref_cross
+to get true bidirectional [fwd, bwd] features at each genomic coordinate.
+Result: [B*512, 8192].
+
+Labels: uint8 {0, 1, 255=missing} from token_labels_binary dataset.
+
+Follows the same training_iterator + inject_labels pattern as the sequence
+probe (pipeline/train.py). DDP gradient sync is handled by PyTorch DDP
+automatically — no manual all_reduce.
 
 Usage:
     sbatch --gpus=4 pipeline/train_token.sh
@@ -14,34 +24,50 @@ Usage:
 
 import json
 import os
-from datetime import timedelta
 from pathlib import Path
 
 import torch
-import torch.distributed as dist
 import typer
 import wandb
+from goodfire_core.data.interfaces import TensorActivations
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 from goodfire_core.training.optimizers import EMuon
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
-from loaders import load_heads
-from paths import ARTIFACTS
+import torch.distributed as dist
+from paths import DECONFOUNDED
 from probe.covariance import HeadSpec, MultiHeadCovProbeV2, multihead_loss_v2
+from training import ddp_context
 
-DECONFOUNDED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
+
+def unpack_ref_tokens(raw: torch.Tensor) -> torch.Tensor:
+    """[B, 2, 3, 256, 4096] → [B*512, 8192] per-token bidirectional ref.
+
+    ref_cross IS the opposite model direction at the same genomic positions.
+    Forward positions: ref_same=fwd, ref_cross=bwd → cat = [fwd, bwd]
+    Backward positions: ref_cross=fwd, ref_same=bwd → cat = [fwd, bwd]
+    """
+    fwd_tokens = torch.cat([raw[:, 0, 1], raw[:, 0, 2]], dim=-1)  # [B, 256, 8192]
+    bwd_tokens = torch.cat([raw[:, 1, 2], raw[:, 1, 1]], dim=-1)  # [B, 256, 8192]
+    return torch.cat([fwd_tokens, bwd_tokens], dim=1).reshape(-1, 8192)
 
 
-def load_disruption_specs() -> dict[str, HeadSpec]:
-    """Load only disruption heads from heads.json."""
-    heads = load_heads()
-    return {
-        name: HeadSpec(n_classes=info["n_classes"], kind=info["kind"])
-        for name, info in heads.items()
-        if info["category"] != "effect"
-    }
+def load_token_labels(storage: FilesystemStorage) -> dict[str, torch.Tensor]:
+    """Pre-load all token labels into memory: {sequence_id → [n_heads, 512] uint8}.
+
+    ~36 GB for 184K variants × 383 heads × 512 positions.
+    Same pattern as the sequence probe's label_matrix, just larger.
+    """
+    ds = ActivationDataset(storage, "token_labels_binary", batch_size=512, include_provenance=True)
+    labels: dict[str, torch.Tensor] = {}
+    for chunk_id in tqdm(range(ds.num_chunks), desc="Loading token labels"):
+        chunk = ds.load_chunk(chunk_id)
+        for i, sid in enumerate(chunk.sequence_ids):
+            labels[sid] = chunk.acts[i]  # [n_heads, 512] uint8
+    logger.info(f"Token labels: {len(labels):,} variants loaded")
+    return labels
 
 
 def train(
@@ -50,112 +76,92 @@ def train(
     d_model: int,
     d_hidden: int,
     d_probe: int,
-    epochs: int,
     lr: float,
-    batch_size: int,
     focal_gamma: float,
+    batch_size: int,
     seed: int,
 ) -> None:
     torch.manual_seed(seed)
 
-    # DDP
-    distributed = dist.is_available() and "RANK" in os.environ
-    if distributed:
-        dist.init_process_group("nccl", timeout=timedelta(minutes=30))
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-        torch.cuda.set_device(rank)
-        device = torch.device(f"cuda:{rank}")
-    else:
-        rank, world_size = 0, 1
-        device = torch.device("cuda")
+    with ddp_context() as (device, rank, world_size):
+        distributed = world_size > 1
 
-    # Heads — disruption only
-    specs = load_disruption_specs()
-    head_names = tuple(specs.keys())
-    specs_tuple = tuple(specs.values())
-    n_heads = len(head_names)
+        # Head specs from built dataset
+        head_names_path = activations / "token_labels_binary" / "head_names.json"
+        head_names = tuple(json.loads(head_names_path.read_text()))
+        specs = {name: HeadSpec(n_classes=2, kind="binary") for name in head_names}
+        specs_tuple = tuple(specs.values())
+        n_heads = len(specs)
 
-    if rank == 0:
-        logger.info(f"Disruption heads: {n_heads}")
+        # Pre-load all token labels into memory (~36 GB)
+        storage = FilesystemStorage(activations)
+        token_labels = load_token_labels(storage)
+        missing_labels = torch.full((n_heads, 512), 255, dtype=torch.uint8)
 
-    # Datasets
-    storage = FilesystemStorage(activations)
-    acts_ds = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True)
-    labels_ds = ActivationDataset(storage, "token_labels", batch_size=1, include_provenance=True)
+        # Training iterator — handles DDP chunk partitioning, prefetching, batching
+        per_gpu = max(1, batch_size // world_size)
+        dataset = ActivationDataset(storage, "activations", batch_size=per_gpu)
+        iterator = dataset.training_iterator(device=str(device), n_epochs=1)
 
-    assert acts_ds.num_chunks == labels_ds.num_chunks, (
-        f"Chunk count mismatch: activations={acts_ds.num_chunks}, token_labels={labels_ds.num_chunks}"
-    )
-    n_chunks = acts_ds.num_chunks
+        # Sync step counts across DDP ranks to prevent deadlocks
+        if distributed:
+            steps = torch.tensor([iterator.steps_per_epoch], device=device)
+            dist.all_reduce(steps, op=dist.ReduceOp.MIN)
+            iterator.set_max_steps(int(steps.item()))
 
-    # DDP: partition chunks across ranks
-    rank_chunks = list(range(rank, n_chunks, world_size))
-    steps_per_epoch = len(rank_chunks)
+        def inject(batch):
+            """Unpack tokens and inject per-position labels."""
+            tokens = unpack_ref_tokens(batch.acts.float())  # [B*512, 8192]
+            B = batch.acts.shape[0]
 
-    if rank == 0:
-        logger.info(f"Chunks: {n_chunks} total, {steps_per_epoch} per rank, ~{steps_per_epoch * 39 * 256} tokens/epoch")
+            labels_list = [token_labels.get(sid, missing_labels) for sid in batch.sequence_ids]
+            raw = torch.stack(labels_list)  # [B, n_heads, 512] uint8
+            labels = raw.permute(0, 2, 1).reshape(B * 512, n_heads).float()
+            labels[labels == 255] = -1  # masked sentinel
 
-    # Probe — bilinear, no sqrtm
-    probe = MultiHeadCovProbeV2(
-        d_model=d_model, heads=specs, d_hidden=d_hidden, d_probe=d_probe,
-        n_sqrtm_iters=0,
-    ).to(device)
-    optimizer = EMuon(probe.parameters(), lr=lr)
+            labels = labels.to(tokens.device, non_blocking=True)
+            token_sids = [sid for sid in batch.sequence_ids for _ in range(512)]
+            return TensorActivations(acts=tokens.unsqueeze(1), labels=labels, sequence_ids=token_sids)
 
-    if distributed:
-        probe = DistributedDataParallel(probe, device_ids=[rank])
+        iterator.add_transform(inject)
 
-    # Output
-    out_dir = activations / name
-    if rank == 0:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        wandb.init(project="gfm-probes", name=name, config={
-            "training": "token_level",
-            "d_model": d_model, "d_hidden": d_hidden, "d_probe": d_probe,
-            "lr": lr, "epochs": epochs, "batch_size": batch_size,
-            "focal_gamma": focal_gamma, "n_heads": n_heads, "n_sqrtm_iters": 0,
-        })
+        # Probe
+        probe = MultiHeadCovProbeV2(
+            d_model=d_model, heads=specs, d_hidden=d_hidden, d_probe=d_probe,
+            n_sqrtm_iters=0,
+        ).to(device)
+        optimizer = EMuon(probe.parameters(), lr=lr)
 
-    if distributed:
-        dist.barrier()
+        if distributed:
+            probe = DistributedDataParallel(probe, device_ids=[rank])
 
-    # Train
-    for epoch in range(epochs):
+        out_dir = activations / name
+        if rank == 0:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            wandb.init(project="gfm-probes", name=name, config={
+                "training": "token_binary", "d_model": d_model, "d_hidden": d_hidden,
+                "d_probe": d_probe, "lr": lr, "focal_gamma": focal_gamma,
+                "batch_size": batch_size, "n_heads": n_heads, "n_sqrtm_iters": 0,
+            })
+            logger.info(f"Binary heads: {n_heads}, steps: {iterator.steps_per_epoch}, batch/gpu: {per_gpu}")
+
+        if distributed:
+            dist.barrier()
+
+        # Train — single epoch
         probe.train()
+        pbar = tqdm(iterator.iter_epoch(), total=iterator.steps_per_epoch,
+                     desc="Training", disable=rank != 0)
 
-        # Shuffle chunk order per epoch
-        g = torch.Generator().manual_seed(seed + epoch)
-        perm = torch.randperm(len(rank_chunks), generator=g)
-        epoch_chunks = [rank_chunks[i] for i in perm]
+        for batch in pbar:
+            if batch.batch_size == 0 or batch.labels is None:
+                continue
 
-        pbar = tqdm(epoch_chunks, desc=f"Epoch {epoch+1}/{epochs}", disable=rank != 0)
+            logits = probe(batch.acts)
+            loss = multihead_loss_v2(logits, batch.labels, specs_tuple, focal_gamma=focal_gamma)
 
-        for chunk_id in pbar:
-            acts_chunk = acts_ds.load_chunk(chunk_id)
-            labels_chunk = labels_ds.load_chunk(chunk_id)
-
-            B = acts_chunk.acts.shape[0]
-            raw = acts_chunk.acts.float().to(device, non_blocking=True)
-
-            # Unpack ref view: [B, 2, 3, 256, 4096] → fwd+bwd ref → [B, 256, 8192]
-            acts = raw.reshape(B, 2, 3, 256, 4096)
-            fwd_ref = acts[:, 0, 1]  # [B, 256, 4096]
-            bwd_ref = acts[:, 1, 1]  # [B, 256, 4096]
-            token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192]
-
-            # Labels: [B, n_heads, 256] → transpose to [B, 256, n_heads]
-            labels = labels_chunk.acts.float().to(device, non_blocking=True)
-            labels = labels.permute(0, 2, 1)  # [B, 256, n_heads]
-
-            # Flatten to per-token: [B*256, 1, 8192] acts, [B*256, n_heads] labels
-            n_tokens = B * 256
-            flat_acts = token_acts.reshape(n_tokens, 1, d_model)
-            flat_labels = labels.reshape(n_tokens, n_heads)
-
-            # Forward + loss
-            logits = probe(flat_acts)
-            loss = multihead_loss_v2(logits, flat_labels, specs_tuple, focal_gamma=focal_gamma)
+            if not loss.requires_grad:
+                continue  # all labels masked in this batch
 
             optimizer.zero_grad()
             loss.backward()
@@ -165,33 +171,24 @@ def train(
                 pbar.set_postfix(loss=f"{loss.item():.3f}")
                 wandb.log({"loss": loss.item()})
 
+        pbar.close()
+
         if rank == 0:
             raw_p = probe.module if distributed else probe
-            raw_p.save_checkpoint(str(out_dir / f"checkpoint_epoch_{epoch+1}.pt"))
-
-    # Save
-    if rank == 0:
-        raw_p = probe.module if distributed else probe
-        raw_p.save_checkpoint(str(out_dir / "weights.pt"))
-        (out_dir / "config.json").write_text(json.dumps({
-            "training": "token_level",
-            "d_model": d_model, "d_hidden": d_hidden, "d_probe": d_probe,
-            "lr": lr, "epochs": epochs, "batch_size": batch_size,
-            "focal_gamma": focal_gamma, "n_sqrtm_iters": 0,
-            "disruption_heads": list(specs.keys()),
-            "n_disruption_heads": n_heads,
-        }, indent=2))
-        wandb.finish()
-        logger.info(f"Saved: {out_dir / 'weights.pt'}")
-
-    if distributed:
-        dist.barrier()
-        dist.destroy_process_group()
+            raw_p.save_checkpoint(str(out_dir / "weights.pt"))
+            (out_dir / "config.json").write_text(json.dumps({
+                "training": "token_binary", "d_model": d_model, "d_hidden": d_hidden,
+                "d_probe": d_probe, "lr": lr, "focal_gamma": focal_gamma,
+                "batch_size": batch_size, "n_sqrtm_iters": 0,
+                "heads": list(head_names), "n_heads": n_heads,
+            }, indent=2))
+            wandb.finish()
+            logger.info(f"Saved: {out_dir / 'weights.pt'}")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
-app = typer.Typer(help="Train per-token reference probe")
+app = typer.Typer(help="Train per-token binary probe")
 
 
 @app.command()
@@ -201,10 +198,9 @@ def main(
     d_model: int = typer.Option(8192),
     d_hidden: int = typer.Option(64),
     d_probe: int = typer.Option(128),
-    epochs: int = typer.Option(1),
     lr: float = typer.Option(0.01),
-    batch_size: int = typer.Option(64),
     focal_gamma: float = typer.Option(0.0),
+    batch_size: int = typer.Option(2, help="Variants per batch (each = 512 tokens)"),
     seed: int = typer.Option(42),
 ) -> None:
     if os.environ.get("SLURM_JOB_ID"):

@@ -13,7 +13,6 @@ Usage:
 
 import json
 import os
-from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +20,7 @@ import polars as pl
 import torch
 import torch.distributed as dist
 import typer
+import wandb
 from goodfire_core.data.interfaces import TensorActivations
 from goodfire_core.storage import ActivationDataset, FilesystemStorage
 from goodfire_core.training.optimizers import EMuon
@@ -28,15 +28,10 @@ from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
-import wandb
-from paths import ARTIFACTS, DATA
+from paths import DATA, DECONFOUNDED
 from pipeline.extract import unified_diff, unified_ref
 from probe.covariance import MultiHeadCovProbeV2, multihead_loss_v2
-from training import gene_split, load_head_specs
-
-# ── Paths ────────────────────────────────────────────────────────────────
-
-DECONFOUNDED = ARTIFACTS / "clinvar_evo2_deconfounded_full"
+from training import ddp_context, gene_split, load_head_specs
 
 
 # ── Training ─────────────────────────────────────────────────────────────
@@ -58,18 +53,20 @@ def train(
 ) -> None:
     torch.manual_seed(seed)
 
-    # DDP
-    distributed = dist.is_available() and "RANK" in os.environ
-    if distributed:
-        dist.init_process_group("nccl", timeout=timedelta(minutes=30))
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-        torch.cuda.set_device(rank)
-        device = torch.device(f"cuda:{rank}")
-    else:
-        rank, world_size = 0, 1
-        device = torch.device("cuda")
+    with ddp_context() as (device, rank, world_size):
+        distributed = world_size > 1
+        _train_inner(
+            name, activations, preset, d_model, d_hidden, d_probe,
+            epochs, lr, batch_size, test_size, seed, focal_gamma,
+            device, rank, world_size, distributed,
+        )
 
+
+def _train_inner(
+    name, activations, preset, d_model, d_hidden, d_probe,
+    epochs, lr, batch_size, test_size, seed, focal_gamma,
+    device, rank, world_size, distributed,
+):
     # Heads
     disruption_specs, effect_specs = load_head_specs()
     all_specs = {**disruption_specs, **effect_specs}
@@ -226,10 +223,6 @@ def train(
         }, indent=2))
         wandb.finish()
         logger.info(f"Saved: {out_dir / 'weights.pt'}")
-
-    if distributed:
-        dist.barrier()
-        dist.destroy_process_group()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────

@@ -24,6 +24,8 @@ Parallel (SLURM array):
 """
 
 import json
+import shutil
+import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -57,6 +59,10 @@ def iter_dataset(
     *, batch_size: int = 512, dtype: torch.dtype = torch.bfloat16, device: str = "cuda",
 ) -> Iterator[tuple[torch.Tensor, list[str]]]:
     ds = ActivationDataset(storage, dataset_name, batch_size=batch_size, include_provenance=True)
+    if ds._index_path:  # copy SQLite index to /tmp to avoid NFS locking
+        local = Path(tempfile.mkdtemp(prefix="gf_idx_")) / "index.sqlite"
+        shutil.copy2(ds._index_path, local)
+        ds._index_path = str(local)
     for batch in ds.training_iterator(device=device, n_epochs=1, shuffle=False, drop_last=False, sequence_ids=list(target_ids)):
         x = batch.acts.to(dtype=dtype)
         if transform is not None:
@@ -130,7 +136,12 @@ def main(
 
     # ── Resolve IDs + shard ───────────────────────────────────────────────
     storage = FilesystemStorage(activations)
-    all_ids = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True).list_sequence_ids()
+    ds_ids = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True)
+    if ds_ids._index_path:  # copy SQLite index to /tmp to avoid NFS locking
+        local = Path(tempfile.mkdtemp(prefix="gf_idx_")) / "index.sqlite"
+        shutil.copy2(ds_ids._index_path, local)
+        ds_ids._index_path = str(local)
+    all_ids = ds_ids.list_sequence_ids()
 
     n = len(all_ids)
     effective_shards = min(n_shards, n)

@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVEE — Evo Variant Effect Explorer</title>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #faf8f5; --bg-card: #fff; --text: #1a1a1a; --text-secondary: #555;
+  --text-muted: #999; --accent: #DB8A48; --accent-light: #f0d4b4;
+  --border: #e8e0d4; --positive: #4a9; --negative: #c55; --radius: 10px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+/* ── View Transitions ──────────────────────────────────────────────── */
+::view-transition-old(root) { animation: vt-fade-out 0.15s ease-out; }
+::view-transition-new(root) { animation: vt-fade-in 0.2s ease-out; }
+@keyframes vt-fade-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes vt-fade-in { from { opacity: 0; transform: translateY(6px); } }
+::view-transition-old(header), ::view-transition-new(header) { animation: none; }
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.header {
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+  position: sticky; top: 0; z-index: 100; view-transition-name: header;
+
+  & h1 { font-size: 20px; font-weight: 600; white-space: nowrap; cursor: pointer;
+    transition: color 0.15s; &:hover { color: var(--accent); } }
+  & input { width: 100%; padding: 8px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    &:focus { outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-light); } }
+}
+.search-container { flex: 1; max-width: 560px; margin: 0 auto; position: relative; }
+.header-branding { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+.header-branding img { height: 24px; }
+
+/* ── Layout & Cards ───────────────────────────────────────────────── */
+.container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.card {
+  background: var(--bg-card); border: 1px solid color-mix(in srgb, #000 4%, transparent);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+  box-shadow: 0 1px 3px color-mix(in srgb, #000 4%, transparent),
+              0 4px 14px color-mix(in srgb, #000 2.5%, transparent);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  &:hover { box-shadow: 0 2px 6px color-mix(in srgb, #000 6%, transparent),
+                         0 8px 24px color-mix(in srgb, #000 4%, transparent); }
+  position: relative;
+}
+.card-help-btn { position: absolute; top: 12px; right: 12px; width: 22px; height: 22px;
+  border-radius: 50%; border: 1.5px solid var(--border); background: var(--bg-card);
+  color: var(--text-muted); font-size: 11px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; transition: all 0.15s;
+  &:hover { border-color: var(--accent); color: var(--accent); } }
+.card-help { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.25s ease; overflow: hidden; }
+.card-help.open { grid-template-rows: 1fr; }
+.card-help-inner { overflow: hidden; font-size: 11px; line-height: 1.6; color: var(--text-secondary); }
+.card-help.open .card-help-inner { padding: 10px 0; border-top: 1px solid var(--border); margin-bottom: 8px; }
+.container > .card { animation: card-enter 0.3s ease both; }
+.container > .card:nth-child(2) { animation-delay: 0.04s; }
+.container > .card:nth-child(3) { animation-delay: 0.08s; }
+.container > .card:nth-child(4) { animation-delay: 0.12s; }
+.container > .card:nth-child(5) { animation-delay: 0.16s; }
+.container > .card:nth-child(6) { animation-delay: 0.20s; }
+@keyframes card-enter { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Verdict ──────────────────────────────────────────────────────── */
+.verdict { display: flex; align-items: flex-start; gap: 24px; }
+.verdict-info { flex: 1; }
+.verdict-gene { font-size: 28px; font-weight: 700; }
+.verdict-id { font-size: 13px; color: var(--text-secondary); font-family: monospace; }
+.verdict-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.verdict-links { font-size: 12px; margin-top: 6px; display: flex; gap: 2px; flex-wrap: wrap; }
+.verdict-links a { color: var(--text-muted); padding: 1px 6px; border-radius: 3px;
+  transition: color 0.1s, background 0.1s; }
+.verdict-links a:hover { color: var(--accent); background: var(--accent-light); text-decoration: none; }
+.verdict-links .sep { color: var(--border); }
+.verdict-score { text-align: center; min-width: 150px;
+  & .score-label { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text); margin-bottom: 2px; }
+  & .number { font-size: 48px; font-weight: 700; font-family: "SF Mono", monospace; transition: color 0.3s; }
+}
+
+/* ── Labels ───────────────────────────────────────────────────────── */
+.label-badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.label-pathogenic { background: #fde; color: var(--negative); }
+.label-benign { background: #def; color: #27a; }
+.label-vus { background: #eee; color: #666; }
+
+/* ── Sections ─────────────────────────────────────────────────────── */
+.section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--text); margin: 0 0 10px; font-weight: 600; }
+
+/* ── Profile bars ─────────────────────────────────────────────────── */
+.profile-group { margin-bottom: 16px; }
+.profile-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--accent); font-weight: 600; margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border); }
+.profile-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px;
+  cursor: pointer; border-radius: 3px; transition: background 0.1s; position: relative;
+  &:hover { background: #f8f4ee; } }
+.profile-label { width: 260px; flex-shrink: 0; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.profile-bar-container { flex: 1; height: 16px; background: #f0ebe4;
+  border-radius: 3px; overflow: visible; position: relative;
+  & > div[style] { animation: bar-grow 0.4s cubic-bezier(0.22,1,0.36,1) both; } }
+@keyframes bar-grow { from { transform: scaleX(0); transform-origin: left; } }
+.profile-bar { height: 100%; border-radius: 3px; }
+.profile-bar-ref { position: absolute; top: 0; left: 0; height: 100%; opacity: 0.5; border-radius: 3px; }
+.profile-bar-var { position: absolute; top: 3px; left: 0; height: calc(100% - 6px); border-radius: 2px; }
+.profile-db-marker { position: absolute; top: -1px; width: 2px; height: calc(100% + 2px);
+  background: #333; border-radius: 1px; z-index: 1; }
+.profile-value { width: 50px; text-align: right; font-family: monospace;
+  font-size: 11px; color: var(--text-secondary); flex-shrink: 0; margin-left: 8px; }
+.profile-delta { width: 48px; text-align: right; font-family: monospace;
+  font-size: 10px; font-weight: 600; flex-shrink: 0; margin-left: 2px; }
+.info-icon { cursor: help; color: #DB8A48; font-size: 9px; margin-left: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #DB8A48;
+  font-style: italic; font-weight: 700; flex-shrink: 0; }
+#global-tip { display: none; position: fixed;
+  background: #333; color: #fff; font-size: 11px; font-weight: 400; font-style: normal;
+  padding: 8px 12px; border-radius: 6px; width: max-content; max-width: 400px; line-height: 1.4;
+  white-space: normal; z-index: 10000; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+.profile-legend { font-size: 10px; color: var(--text-muted); margin-bottom: 8px;
+  display: flex; gap: 10px; align-items: center; }
+.show-more { padding: 4px 0; font-size: 11px; color: var(--accent); cursor: pointer; }
+
+/* ── Detail expansion ─────────────────────────────────────────────── */
+.profile-detail { display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease; overflow: hidden;
+  border-top: 1px solid transparent; margin-top: 4px;
+  &.open { grid-template-rows: 1fr; border-top-color: var(--border); }
+  & > .detail-inner { overflow: hidden; padding: 0; transition: padding 0.25s ease; }
+  &.open > .detail-inner { padding: 10px 0; }
+  & .chart-wrap { position: relative; width: 100%; height: 160px; }
+  & .detail-summary { font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-top: 6px; }
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px;
+  color: var(--text-muted); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+td { padding: 6px 10px; border-bottom: 1px solid #f0ebe4; }
+td.mono { font-family: monospace; font-size: 11px; }
+tr { transition: transform 0.1s ease; &:hover { background: #f8f4ee; transform: translateX(2px); } }
+tr.pathogenic td { background: #fef8f5; }
+tr.benign td { background: #f5f8fe; }
+.neighbor-summary { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;
+  & strong { color: var(--text); } }
+.vus-callout { background: #fef8f2; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
+
+/* ── Search results ───────────────────────────────────────────────── */
+.search-results { position: absolute; top: 100%; left: 0; right: 0;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  max-height: 400px; overflow-y: auto;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 10%, transparent),
+              0 12px 40px color-mix(in srgb, #000 6%, transparent);
+  z-index: 200; opacity: 0; transform: translateY(-4px) scale(0.98);
+  transition: opacity 0.15s ease, transform 0.15s ease; pointer-events: none;
+  &.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; } }
+.search-item { padding: 8px 14px; cursor: pointer; display: flex;
+  justify-content: space-between; align-items: center; font-size: 12px; gap: 12px;
+  transition: background 0.1s; &:hover { background: var(--bg); }
+  & .vid { font-family: monospace; flex-shrink: 0; }
+  & .meta { color: var(--text-muted); text-align: right; } }
+
+/* ── UMAP ─────────────────────────────────────────────────────────── */
+.umap-landing { text-align: center;
+  & h2 { font-size: 18px; margin-bottom: 4px; color: var(--text-secondary); }
+  & p { color: var(--text-muted); margin-bottom: 16px; font-size: 13px; } }
+.umap-wrap { display: inline-block; position: relative; width: 900px; height: 600px;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 4%, transparent); }
+#umap-tooltip { position: fixed; background: color-mix(in srgb, #fff 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
+  font-size: 11px; pointer-events: none;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 10%, transparent);
+  display: none; z-index: 300; line-height: 1.5; }
+.umap-toggle { padding: 5px 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); font-size: 12px; cursor: pointer; color: var(--text-secondary);
+  transition: all 0.15s ease;
+  &:hover { border-color: var(--accent); background: #fef8f2; }
+  &.active { background: var(--accent); color: white; border-color: var(--accent); } }
+
+/* ── Interpretation ───────────────────────────────────────────────── */
+.interp-card { border-left: 3px solid var(--accent); }
+.interp-mechanism { font-size: 15px; line-height: 1.5; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.interp-summary { font-size: 11px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
+.interp-evidence { list-style: none; padding: 0;
+  & li { font-size: 12px; color: var(--text-secondary); padding: 3px 0 3px 16px; position: relative;
+    &::before { content: "\2192"; position: absolute; left: 0; color: var(--accent); } } }
+.interp-confidence { display: inline-block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.conf-high { background: #dfd; color: #384; }
+.conf-medium { background: #fed; color: #974; }
+.conf-low { background: #fdd; color: #944; }
+.interp-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); padding: 12px 0; }
+.interp-spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.distribution-container { position: relative; width: 100%; height: 220px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 onclick="navigate('')">EVEE <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px">Evo Variant Effect Explorer</span></h1>
+  <div class="search-container">
+    <input type="text" id="search" placeholder="Search gene or variant (BRCA1, chr17:43093110:C:T)" autocomplete="off">
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="header-branding">
+    <img src="goodfire-color.svg" alt="Goodfire">
+    <img src="Mayo_Clinic_Logo_2023.png" alt="Mayo Clinic" style="height:48px">
+  </div>
+</div>
+
+<div class="container" id="content"></div>
+<div id="global-tip"></div>
+<div id="umap-tooltip"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────
+// config.js (if present) sets window.__APP_CONFIG__ before this runs.
+// API_BASE set → API mode (deployed, hits API Gateway + DynamoDB)
+// API_BASE empty → static mode (local dev, reads JSON files via serve.py)
+const CONFIG = Object.assign({
+  STATIC_BASE: '',
+  API_BASE: '',
+}, window.__APP_CONFIG__ || {});
+
+// ── State ────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+const content = document.getElementById('content');
+const tooltip = document.getElementById('umap-tooltip');
+
+let distributions = null, umapData = null, distChart = null, currentVariant = null;
+let globalData = null, searchIndex = null, searchIndexPromise = null;
+let analysisAbortController = null;
+const detailCharts = {};
+const LABEL_NAMES = ['benign', 'pathogenic', 'VUS'];
+const COLLAPSE_THRESHOLD = 5;
+
+// ── Helpers ──────────────────────────────────────────────────────────
+const _comp = {A:'T',T:'A',C:'G',G:'C',a:'t',t:'a',c:'g',g:'c'};
+function complement(base) { return base.split('').map(b => _comp[b] || b).join(''); }
+function escAttr(s) { return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Info tooltip: single global element, positioned at icon on hover
+const _gTip = document.getElementById('global-tip');
+document.addEventListener('mouseover', e => {
+  if (!e.target.classList?.contains('info-icon')) return;
+  const desc = e.target.dataset.desc;
+  if (!desc) return;
+  const r = e.target.getBoundingClientRect();
+  _gTip.textContent = desc;
+  _gTip.style.left = Math.max(10, r.left) + 'px';
+  _gTip.style.top = (r.top - 6) + 'px';
+  _gTip.style.transform = 'translateY(-100%)';
+  _gTip.style.display = 'block';
+});
+document.addEventListener('mouseout', e => {
+  if (!e.target.classList?.contains('info-icon')) return;
+  _gTip.style.display = 'none';
+});
+function viewTransition(fn) { document.startViewTransition ? document.startViewTransition(fn) : fn(); }
+function navigate(path) {
+  const target = path ? `#/${path}` : '#/';
+  if (location.hash === target) route(); // re-trigger even if hash unchanged
+  else location.hash = target;
+}
+function safeVariantId(vid) {
+  const s = vid.replace(/:/g, '_').replace(/\//g, '_');
+  if (s.length <= 200) return s;
+  // FNV-1a 64-bit, matching Python's sanitize_vid
+  let h = 0xCBF29CE484222325n;
+  for (let i = 0; i < vid.length; i++) h = ((h ^ BigInt(vid.charCodeAt(i))) * 0x100000001B3n) & 0xFFFFFFFFFFFFFFFFn;
+  return s.slice(0, 60) + '_' + h.toString(16).padStart(16, '0');
+}
+function truncate(s, n = 30) { return s.length > n ? s.slice(0, n - 2) + '\u2026' : s; }
+function scoreColor(s) { return `rgb(${Math.round(215*s)}, 80, ${Math.round(178*(1-s))})`; }
+function displayName(head) { return globalData?.display?.[head] || head; }
+
+const LABEL_DISPLAY = {
+  'pathogenic': 'Pathogenic', 'likely_pathogenic': 'Likely Pathogenic',
+  'benign': 'Benign', 'likely_benign': 'Likely Benign', 'VUS': 'VUS',
+};
+function labelBadge(label) {
+  const cls = label.includes('pathogenic') ? 'pathogenic' : label.includes('benign') ? 'benign' : 'vus';
+  return `<span class="label-badge label-${cls}">${LABEL_DISPLAY[label] || label.replace(/_/g, ' ')}</span>`;
+}
+
+const CSQ_DISPLAY = {
+  'missense_variant': 'Missense', 'synonymous_variant': 'Synonymous',
+  'frameshift_variant': 'Frameshift', 'nonsense': 'Nonsense', 'stop_gained': 'Stop Gained',
+  'splice_donor_variant': 'Splice Donor', 'splice_acceptor_variant': 'Splice Acceptor',
+  'splice_region_variant': 'Splice Region', 'intron_variant': 'Intronic',
+  'non-coding_transcript_variant': 'Non-coding', 'start_lost': 'Start Lost',
+  'stop_lost': 'Stop Lost', 'inframe_deletion': 'In-frame Deletion',
+  'inframe_insertion': 'In-frame Insertion', 'inframe_indel': 'In-frame Indel',
+  '5_prime_UTR_variant': "5' UTR", '3_prime_UTR_variant': "3' UTR",
+  'genic_downstream_transcript_variant': 'Downstream', 'genic_upstream_transcript_variant': 'Upstream',
+  'initiator_codon_variant': 'Initiator Codon', 'no_sequence_alteration': 'No Change',
+};
+function humanConsequence(c) { return !c ? '' : CSQ_DISPLAY[c] || c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); }
+
+function barColor(v) {
+  if (v > 0.9) return '#c55'; if (v > 0.75) return '#DB8A48';
+  if (v < 0.1) return '#27a'; if (v < 0.25) return '#6ac'; return '#bbb';
+}
+
+function headColor(head, value, isDelta) {
+  let dist = distributions?.[head];
+  if (!dist) return '#bbb';
+  // Handle nested structure for disruption heads: use ref distribution for coloring
+  if (dist.ref) dist = dist.ref;
+  if (!dist.benign) return '#bbb';
+  const [lo, hi] = dist.range || [0, 1];
+  const bins = dist.bins || 40;
+  const mapped = (value - lo) / (hi - lo);
+  const bin = Math.max(0, Math.min(bins - 1, Math.floor(mapped * bins)));
+  const bRaw = dist.benign[bin] || 0, pRaw = dist.pathogenic[bin] || 0;
+  if (bRaw + pRaw < 5) return '#bbb';
+  const bTotal = dist._bTotal ??= dist.benign.reduce((a, x) => a + x, 0) || 1;
+  const pTotal = dist._pTotal ??= dist.pathogenic.reduce((a, x) => a + x, 0) || 1;
+  return barColor(pRaw / pTotal / (pRaw / pTotal + bRaw / bTotal));
+}
+
+function evalBadge(head) {
+  const e = globalData?.eval?.[head];
+  return e ? ` <span style="font-size:9px;color:var(--text-muted)">${e.metric}=${e.value}</span>` : '';
+}
+
+function cardHelp(id, text) {
+  return `<button class="card-help-btn" onclick="event.stopPropagation();const h=document.getElementById('help-${id}');h.classList.toggle('open')">?</button>
+    <div id="help-${id}" class="card-help"><div class="card-help-inner">${text}</div></div>`;
+}
+
+// ── Data loading ─────────────────────────────────────────────────────
+// global.json (~300KB): distributions, heads, display, eval. Always needed.
+// umap.json (~2.3MB): only loaded when the landing page is shown.
+const staticPrefix = CONFIG.STATIC_BASE ? CONFIG.STATIC_BASE + '/' : '';
+const globalReady = fetch(`${staticPrefix}global.json`).then(r => r.json()).then(g => {
+  distributions = g.distributions;
+  globalData = { heads: g.heads, display: g.display, eval: g.eval, descriptions: g.descriptions || {}, head_stats: g.head_stats || {} };
+  if (g.umap) umapData = g.umap;
+  if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
+});
+let umapReady = null;
+function ensureUmap() {
+  umapReady ??= fetch(`${staticPrefix}umap.json`).then(r => r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : null).then(u => { if (u) umapData = u; });
+  return umapReady;
+}
+
+// Static mode: client-side search via search.json
+function ensureSearchIndex() {
+  searchIndexPromise ??= fetch('search.json').then(r => {
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return {};
+    return r.json();
+  }).then(idx => { searchIndex = idx; });
+  return searchIndexPromise;
+}
+
+// API mode: server-side search via GET /variants/search
+async function apiSearch(query) {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const resp = await fetch(`${CONFIG.API_BASE}/variants/search?q=${encodeURIComponent(q)}`);
+  if (!resp.ok) return [];
+  return resp.json();
+}
+
+// ── Routing ──────────────────────────────────────────────────────────
+function route() {
+  tooltip.style.display = 'none';
+  const hash = location.hash || '#/';
+  hash.startsWith('#/variant/')
+    ? loadVariant(decodeURIComponent(hash.slice('#/variant/'.length)))
+    : showLanding();
+}
+window.addEventListener('hashchange', route);
+window.addEventListener('DOMContentLoaded', route);
+
+// ── Search ───────────────────────────────────────────────────────────
+function clientSearch(query) {
+  if (!searchIndex) return [];
+  const q = query.trim().toUpperCase();
+  const entries = searchIndex[q] || Object.keys(searchIndex).filter(k => k.startsWith(q)).flatMap(k => searchIndex[k]);
+  return entries.sort((a, b) => b.s - a.s).slice(0, 30);
+}
+
+function renderSearchResults(results) {
+  searchResults.innerHTML = results.length
+    ? results.map(r => `<div class="search-item" onclick="navigate('variant/${r.v}')">
+        <span class="vid" title="${r.v}">${truncate(r.v)}</span>
+        <span class="meta">${humanConsequence(r.c)} \u00b7 ${LABEL_DISPLAY[r.l] || r.l}</span></div>`).join('')
+    : '<div class="search-item"><span class="meta">No results</span></div>';
+  searchResults.classList.add('visible');
+}
+
+let searchTimeout = null;
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimeout);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { searchResults.classList.remove('visible'); return; }
+  if (q.includes(':') && q.split(':').length >= 4) {
+    searchResults.classList.remove('visible');
+    navigate(`variant/${q}`); return;
+  }
+  if (CONFIG.API_BASE) {
+    searchTimeout = setTimeout(() => apiSearch(q).then(r => renderSearchResults(r)), 300);
+  } else {
+    searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+  }
+});
+searchInput.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = searchInput.value.trim();
+  searchResults.classList.remove('visible');
+  if (q.includes(':') && q.split(':').length >= 4) navigate(`variant/${q}`);
+  else if (CONFIG.API_BASE) {
+    apiSearch(q).then(r => { if (r.length) navigate(`variant/${r[0].v}`); });
+  } else {
+    ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+  }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
+});
+
+// ── Unified bar rendering ────────────────────────────────────────────
+// One function for all score bars: effect, disruption, predictors, attribution.
+
+function scoreBar({value, head, gt, diverging}) {
+  const color = headColor(head, value, diverging);
+  let html = '';
+  if (diverging) {
+    const w = Math.min(50, Math.abs(value) * 150);
+    html += `<div style="position:absolute;top:0;left:50%;height:100%;width:${w}%;background:${color};border-radius:3px;${value < 0 ? 'transform:translateX(-100%)' : ''}"></div>`;
+    html += `<div style="position:absolute;top:0;left:50%;width:1px;height:100%;background:var(--border)"></div>`;
+  } else {
+    html += `<div class="profile-bar" style="width:${Math.max(2, value * 100)}%;background:${color}"></div>`;
+  }
+  if (gt != null) html += `<div class="profile-db-marker" style="left:${Math.max(0, Math.min(100, gt * 100))}%"></div>`;
+  return html;
+}
+
+function scoreRow({key, value, gt, diverging, label, badge}) {
+  const name = label || displayName(key);
+  const eb = badge || evalBadge(key);
+  const desc = globalData?.descriptions?.[key];
+  const iIcon = desc ? ` <span class="info-icon" data-desc="${escAttr(desc)}">i</span>` : '';
+  const color = diverging ? headColor(key, value, true) : 'var(--text-secondary)';
+  const formatted = diverging ? `${value > 0 ? '+' : ''}${value.toFixed(3)}` : value.toFixed(3);
+  return `<div class="profile-row" onclick="toggleBarDetail('${key}','${name}',${value},this,${gt ?? 'null'})">
+    <div class="profile-label">${name}${iIcon}${eb}</div>
+    <div class="profile-bar-container">${scoreBar({value, head: key, gt, diverging})}</div>
+    <div class="profile-value" style="color:${color}">${formatted}</div>
+  </div>`;
+}
+
+function colorLegend() {
+  return `Color = likelihood ratio:
+    <span style="color:#c55">\u25A0</span> pathogenic
+    <span style="color:#DB8A48">\u25A0</span> leaning path.
+    <span style="color:#bbb">\u25A0</span> neutral
+    <span style="color:#6ac">\u25A0</span> leaning benign
+    <span style="color:#27a">\u25A0</span> benign`;
+}
+
+// ── Shared helpers ───────────────────────────────────────────────────
+function extractDelta(rawD) {
+  if (rawD == null) return { ref: 0, var: 0, delta: 0 };
+  if (Array.isArray(rawD)) return { ref: rawD[0], var: rawD[1], delta: rawD[1] - rawD[0] };
+  return { ref: 0, var: 0, delta: rawD };
+}
+function deltaColor(z, sign) {
+  return z < 1 ? { text: 'var(--text-muted)', bar: '#ccc' }
+    : { text: sign < 0 ? '#c55' : '#4a9', bar: sign < 0 ? '#c55' : '#4a9' };
+}
+
+// Disruption row: works for both Top Disruptions (attribution, it.z provided) and All Disruptions (z computed from stats)
+function disruptionRow(it) {
+  const name = displayName(it.key);
+  const eb = evalBadge(it.key);
+  const desc = globalData?.descriptions?.[it.key];
+  const iIcon = desc ? ` <span class="info-icon" data-desc="${escAttr(desc)}">i</span>` : '';
+  const delta = it.delta ?? 0;
+  const ref = it.ref ?? 0, va = it.var ?? 0;
+  const refColor = headColor(it.key, ref, false);
+  const varColor = headColor(it.key, va, false);
+  const stats = globalData?.head_stats?.[it.key];
+  const zSigned = it.z != null ? (delta < 0 ? -Math.abs(it.z) : Math.abs(it.z))
+    : (stats?.std > 0 ? (delta - stats.mean) / stats.std : 0);
+  const z = Math.abs(zSigned);
+  const sign = delta < 0 ? -1 : 1;
+  const { text: dc, bar: bc } = deltaColor(z, sign);
+  const pctLabel = z > 0 ? `${zSigned > 0 ? '+' : '\u2212'}${z.toFixed(1)}\u03C3` : '';
+  const zBarW = Math.min(z / 4 * 50, 50);
+  const deltaBarStyle = delta >= 0
+    ? `left:50%;width:${zBarW}%;background:${bc}`
+    : `right:50%;width:${zBarW}%;background:${bc}`;
+  return `<div class="profile-row" onclick="toggleBarDetail('${it.key}','${name}',${delta},this,${it.gt ?? 'null'})">
+    <div class="profile-label">${name}${iIcon}${eb}</div>
+    <div style="display:flex;flex-direction:column;gap:1px;flex:1;background:#f0ede8;border-radius:2px;padding:1px">
+      <div style="height:7px;border-radius:2px;width:${ref > 0 ? Math.max(2,ref*100) : 0}%;background:${refColor};opacity:0.5"></div>
+      <div style="height:7px;border-radius:2px;width:${va > 0 ? Math.max(2,va*100) : 0}%;background:${varColor}"></div>
+    </div>
+    <div style="flex:1;height:16px;position:relative;margin:0 4px;background:#f5f2ee;border-radius:3px;overflow:hidden">
+      <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#ddd"></div>
+      <div style="position:absolute;top:3px;height:10px;border-radius:2px;${deltaBarStyle}"></div>
+    </div>
+    <div class="profile-value" style="color:${dc};font-weight:600">${delta > 0 ? '+' : ''}${delta.toFixed(3)}</div>
+    <div style="width:40px;text-align:right;font-family:monospace;font-size:10px;color:${dc};flex-shrink:0">${pctLabel}</div>
+  </div>`;
+}
+function effectRow(it) { return scoreRow({key: it.key, value: it.val, gt: it.gt}); }
+
+// ── Collapsible group (items sorted by JS from flat variant values) ───
+function renderGroup(groupName, items, renderItem, prefix) {
+  const visible = items.slice(0, COLLAPSE_THRESHOLD);
+  const hidden = items.slice(COLLAPSE_THRESHOLD);
+  const gid = `${prefix}-${groupName.replace(/\s+/g, '-').toLowerCase()}`;
+  let html = `<div class="profile-group"><div class="profile-group-title">${groupName}</div>`;
+  html += visible.map(renderItem).join('');
+  if (hidden.length) {
+    html += `<div id="more-${gid}" style="display:none">${hidden.map(renderItem).join('')}</div>`;
+    html += `<div class="show-more" onclick="toggleMore(this,'${gid}',${items.length})">Show all ${items.length}</div>`;
+  }
+  return html + '</div>';
+}
+
+function toggleMore(el, gid, total) {
+  const t = document.getElementById('more-' + gid);
+  const show = t.style.display === 'none';
+  t.style.display = show ? 'block' : 'none';
+  el.textContent = show ? 'Show less' : `Show all ${total}`;
+}
+
+// ── Detail expansion ─────────────────────────────────────────────────
+function toggleBarDetail(head, label, value, rowEl, gt) {
+  const did = `detail-${head}`;
+  const existing = document.getElementById(did);
+  if (existing?.classList.contains('open')) {
+    existing.classList.remove('open');
+    setTimeout(() => {
+      for (const k of Object.keys(detailCharts)) if (k.startsWith(did)) { detailCharts[k]?.destroy(); delete detailCharts[k]; }
+    }, 300);
+    return;
+  }
+  document.querySelectorAll('.profile-detail.open').forEach(el => {
+    el.classList.remove('open');
+    setTimeout(() => {
+      for (const k of Object.keys(detailCharts)) if (k.startsWith(el.id)) { detailCharts[k]?.destroy(); delete detailCharts[k]; }
+    }, 300);
+  });
+  let detail = existing;
+  const isDisruption = currentVariant.disruption?.[head] != null;
+  if (!detail) {
+    detail = document.createElement('div');
+    detail.id = did; detail.className = 'profile-detail';
+    if (isDisruption) {
+      detail.innerHTML = `<div class="detail-inner">
+        <div style="display:flex;gap:8px;margin-left:140px;margin-right:90px">
+          <div style="flex:1;background:#f5f2ee;border-radius:4px;padding:6px 4px 4px"><div style="font-size:9px;color:var(--text-muted);text-align:center;margin-bottom:2px">Score Distribution (··· ref, --- var)</div><div class="chart-wrap"><canvas id="${did}-ref"></canvas></div></div>
+          <div style="flex:1;background:#f5f2ee;border-radius:4px;padding:6px 4px 4px"><div style="font-size:9px;color:var(--text-muted);text-align:center;margin-bottom:2px">Delta Distribution (var \u2212 ref)</div><div class="chart-wrap"><canvas id="${did}-delta"></canvas></div></div>
+        </div>
+        <div class="detail-summary"></div>
+      </div>`;
+    } else {
+      detail.innerHTML = '<div class="detail-inner"><div class="chart-wrap"><canvas></canvas></div><div class="detail-summary"></div></div>';
+    }
+    rowEl.after(detail);
+  }
+  requestAnimationFrame(() => detail.classList.add('open'));
+
+  let summary = isDisruption
+    ? `<b>${label}</b>: disruption <b style="color:${headColor(head, value, true)}">${value > 0 ? '+' : ''}${value.toFixed(3)}</b> for this ${humanConsequence(currentVariant.consequence)}.`
+    : `<b>${label}</b>: predicted <b>${value.toFixed(3)}</b> for this ${humanConsequence(currentVariant.consequence)}.`;
+  if (gt != null) {
+    const err = Math.abs(value - gt);
+    const cal = err < 0.05 ? 'well-calibrated' : err < 0.15 ? 'close' : err < 0.35 ? 'moderately off' : 'poorly calibrated';
+    summary += ` Database: <b>${gt.toFixed(3)}</b> (${cal}, |err|=${err.toFixed(3)}).`;
+  } else summary += ' No database value available.';
+  detail.querySelector('.detail-summary').innerHTML = summary;
+
+  const dist = distributions?.[head];
+  if (!dist) return;
+
+  if (isDisruption && dist.ref && dist.delta) {
+    // Dual histograms for disruption heads
+    const rawD = currentVariant.disruption[head];
+    const ref = Array.isArray(rawD) ? rawD[0] : 0;
+    const va = Array.isArray(rawD) ? rawD[1] : 0;
+    const delta = va - ref;
+    renderDualChart(`${did}-ref`, dist.ref, ref, va);
+    renderDualChart(`${did}-delta`, dist.delta, delta, null);
+  } else {
+    // Single histogram for effect heads
+    const canvas = detail.querySelector('canvas');
+    if (canvas) renderSingleChart(did, dist, value);
+  }
+}
+
+function _markerPlugin(markerBin, color, dashPattern) {
+  return { id: `mk-${color}-${markerBin}`, afterDraw(chart) {
+    const meta = chart.getDatasetMeta(0); if (!meta.data[markerBin]) return;
+    const c = chart.ctx; c.save(); c.beginPath();
+    c.moveTo(meta.data[markerBin].x, chart.chartArea.top);
+    c.lineTo(meta.data[markerBin].x, chart.chartArea.bottom);
+    c.strokeStyle = color; c.lineWidth = 2;
+    if (dashPattern) c.setLineDash(dashPattern);
+    c.stroke(); c.restore();
+  }};
+}
+
+function _binIndex(value, lo, hi, bins) {
+  return Math.min(bins - 1, Math.max(0, Math.floor((value - lo) / (hi - lo) * bins)));
+}
+
+function createHistogramChart(canvasOrId, data, plugins) {
+  const canvas = typeof canvasOrId === 'string' ? document.getElementById(canvasOrId) : canvasOrId;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const [lo, hi] = data.range || [0, 1];
+  const bins = data.bins;
+  const key = canvas.id || canvasOrId;
+  detailCharts[key]?.destroy();
+  detailCharts[key] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: Array.from({length: bins}, (_, i) => (lo + (hi - lo) * i / bins).toFixed(2)),
+      datasets: [
+        { label: 'Benign', data: data.benign, backgroundColor: 'rgba(34,119,170,0.35)', borderWidth: 0 },
+        { label: 'Pathogenic', data: data.pathogenic, backgroundColor: 'rgba(204,85,85,0.35)', borderWidth: 0 },
+      ] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      scales: { x: { display: false }, y: { display: false } },
+      plugins: { legend: { position: 'top', labels: { boxWidth: 8, font: { size: 9 } } } } },
+    plugins: plugins || [],
+  });
+}
+
+function renderDualChart(canvasId, data, marker1, marker2) {
+  const [lo, hi] = data.range || [0, 1];
+  const plugins = [_markerPlugin(_binIndex(marker1, lo, hi, data.bins), '#333', [2, 2])];
+  if (marker2 != null) plugins.push(_markerPlugin(_binIndex(marker2, lo, hi, data.bins), '#c55', [6, 3]));
+  createHistogramChart(canvasId, data, plugins);
+}
+
+function renderSingleChart(did, data, value) {
+  const canvas = document.getElementById(did)?.querySelector('canvas');
+  if (!canvas) return;
+  const [lo, hi] = data.range || [0, 1];
+  createHistogramChart(canvas, data, [_markerPlugin(_binIndex(value, lo, hi, data.bins), '#333', [6, 3])]);
+}
+
+// ── UMAP landing ─────────────────────────────────────────────────────
+let umapMode = 'predicted';
+
+function showLanding() {
+  searchInput.value = '';
+  viewTransition(() => {
+    const scoreLeg = `<span style="display:inline-flex;align-items:center;gap:6px">
+      <span style="font-size:10px">0%</span>
+      <span style="display:inline-block;width:120px;height:10px;border-radius:3px;background:linear-gradient(to right, rgb(33,120,171), #bbb 50%, rgb(204,85,85))"></span>
+      <span style="font-size:10px">100%</span></span>`;
+    const labelLeg = [['pathogenic','#c55'],['likely path.','#DB8A48'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']]
+      .map(([n,c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c}${n==='VUS'?';opacity:0.6':''}"></span> ${n}</span>`).join('');
+
+    content.innerHTML = `
+      <div style="max-width:700px;margin:0 auto 32px;text-align:center">
+        <h2 style="font-size:24px;font-weight:700;margin-bottom:12px">EVEE</h2>
+        <p style="font-size:14px;line-height:1.7;color:var(--text-secondary)">
+          EVEE (Evo Variant Effect Explorer) predicts the clinical significance of over
+          4 million ClinVar variants using covariance probes trained on
+          Evo2, a 7-billion-parameter DNA foundation model.
+          The system achieves 0.97 AUROC on a deconfounded ClinVar benchmark, matching or
+          exceeding CADD and AlphaMissense across all variant types. Each variant card
+          shows probe-derived disruption profiles, predicted clinical scores, nearest
+          neighbor evidence, and AI-generated clinical interpretations.
+        </p>
+        <div style="display:flex;align-items:center;justify-content:center;gap:24px;margin-top:16px">
+          <span style="font-size:12px;color:var(--text-muted)">Developed by</span>
+          <img src="goodfire-color.svg" alt="Goodfire" style="height:20px">
+          <img src="Mayo_Clinic_Logo_2023.png" alt="Mayo Clinic" style="height:36px">
+        </div>
+      </div>
+      <div class="umap-landing">
+      <h2>Variant Embedding Space</h2>
+      <p>30k variants. Click a point to view its card.</p>
+      <div style="margin-bottom:10px;display:flex;gap:4px;justify-content:center">
+        <button class="umap-toggle ${umapMode==='predicted'?'active':''}" data-mode="predicted" onclick="setUmapMode('predicted')">Pathogenicity</button>
+        <button class="umap-toggle ${umapMode==='labeled'?'active':''}" data-mode="labeled" onclick="setUmapMode('labeled')">ClinVar label</button>
+      </div>
+      <div class="umap-wrap" id="umap-container"></div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text-muted);display:flex;gap:12px;justify-content:center;align-items:center">
+        ${umapMode === 'predicted' ? scoreLeg : labelLeg}
+      </div>
+    </div>`;
+    Promise.all([globalReady, ensureUmap()]).then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
+  });
+}
+
+function setUmapMode(mode) {
+  umapMode = mode;
+  document.querySelectorAll('.umap-toggle').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  if (document.getElementById('umap-container') && umapData) renderUmap();
+}
+
+function getUmapColors() {
+  const {score, labels} = umapData;
+  const lc = { pathogenic: [.80,.33,.33,.8], likely_pathogenic: [.86,.54,.28,.8],
+    benign: [.13,.47,.67,.8], likely_benign: [.42,.67,.80,.8], VUS: [.63,.63,.63,.4] };
+  if (umapMode === 'labeled') return labels.map(l => lc[LABEL_NAMES[l] || l] || lc.VUS);
+  return score.map(s => {
+    if (s < 0.5) { const t = s * 2; return [.13+t*.53, .47+t*.20, .67, .8]; }
+    const t = (s - .5) * 2; return [.67+t*.13, .67-t*.33, .67-t*.33, .8];
+  });
+}
+
+function renderUmap() {
+  const container = document.getElementById('umap-container');
+  if (!container || !umapData) return;
+  container.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  container.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  const dpr = devicePixelRatio || 1, W = 900, H = 600;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  canvas.width = W * dpr; canvas.height = H * dpr; ctx.scale(dpr, dpr);
+
+  const {x, y, score, ids, genes, labels, gene_list} = umapData;
+  const labelStr = labels.map(l => LABEL_NAMES[l] || '?');
+  const geneStr = gene_list ? genes.map(g => gene_list[g] || '?') : genes;
+  const n = x.length;
+  const xMin = x.reduce((a,b) => Math.min(a,b)), xMax = x.reduce((a,b) => Math.max(a,b));
+  const yMin = y.reduce((a,b) => Math.min(a,b)), yMax = y.reduce((a,b) => Math.max(a,b));
+  const pad = 15, w = W - 2*pad, h = H - 2*pad;
+  const px = new Float32Array(n), py = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    px[i] = pad + (x[i] - xMin) / (xMax - xMin) * w;
+    py[i] = pad + (y[i] - yMin) / (yMax - yMin) * h;
+  }
+
+  ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, H);
+  const colors = getUmapColors();
+  const lp = { benign: 0, likely_benign: 1, VUS: 2, likely_pathogenic: 3, pathogenic: 4 };
+  const order = Array.from({length: n}, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [order[i], order[j]] = [order[j], order[i]]; }
+  for (const i of order) {
+    const c = colors[i], alpha = (umapMode === 'labeled' && labelStr[i] === 'VUS') ? .35 : .7;
+    ctx.fillStyle = `rgba(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0},${alpha})`;
+    ctx.beginPath(); ctx.arc(px[i], py[i], 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function findNearest(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = (e.clientX - cr.left) * (W / cr.width), my = (e.clientY - cr.top) * (H / cr.height);
+    let best = -1, bestD = 12;
+    for (let i = 0; i < n; i++) { const d = Math.hypot(mx - px[i], my - py[i]); if (d < bestD) { bestD = d; best = i; } }
+    return best;
+  }
+  let raf = false;
+  canvas.onmousemove = e => { if (raf) return; raf = true; requestAnimationFrame(() => { raf = false;
+    const i = findNearest(e);
+    if (i >= 0) {
+      const s = score[i], lbl = labelStr[i];
+      const c = lbl.includes('pathogenic') ? '#c55' : lbl.includes('benign') ? '#27a' : '#666';
+      tooltip.style.display = 'block'; tooltip.style.left = (e.clientX+14)+'px'; tooltip.style.top = (e.clientY-10)+'px';
+      tooltip.innerHTML = `<b>${geneStr[i]||'?'}</b> <span style="color:${c};font-weight:600">${lbl}</span><br>
+        <span style="font-family:monospace;font-size:10px">${ids[i]}</span><br>
+        Pathogenicity: <b style="color:${scoreColor(s)}">${(s * 100).toFixed(0)}%</b>`;
+      canvas.style.cursor = 'pointer';
+    } else { tooltip.style.display = 'none'; canvas.style.cursor = 'crosshair'; }
+  }); };
+  canvas.onclick = e => { canvas.onmousemove = null; tooltip.style.display = 'none'; const i = findNearest(e); if (i >= 0) navigate(`variant/${ids[i]}`); };
+  canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// Schema v2: variant JSON has flat disruption/effect/gt dicts + nP/nB/nV counts.
+// JS joins with globalData.heads for grouping, globalData.display for names.
+
+// ── Variant: rendering (presentation) ────────────────────────────────
+function loadVariant(variantId) {
+  searchResults.classList.remove('visible');
+  tooltip.style.display = 'none';
+  searchInput.value = variantId;
+  const variantUrl = CONFIG.API_BASE
+    ? `${CONFIG.API_BASE}/variants/${encodeURIComponent(variantId)}`
+    : `variants/${safeVariantId(variantId)}.json`;
+  const variantReady = fetch(variantUrl)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); });
+  Promise.all([variantReady, globalReady])
+    .then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })
+    .catch(e => {
+      console.error('loadVariant:', e);
+      content.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--text-muted)">
+        <div style="font-size:16px;font-weight:600;margin-bottom:4px">Variant not found</div>
+        <div style="font-size:13px;font-family:monospace">${variantId}</div></div>`;
+    });
+}
+
+function renderInterpretation(container, interp) {
+  if (!interp || (!interp.summary && interp.status !== 'ok')) { container.style.display = 'none'; return; }
+  const cc = interp.confidence === 'high' ? 'conf-high' : interp.confidence === 'medium' ? 'conf-medium' : 'conf-low';
+  container.innerHTML = `
+    ${cardHelp('interp', '<b>Automated Interpretation.</b> Generated on-demand by Claude using the full disruption profile, predicted clinical scores, and nearest neighbor evidence as context. <b>Mechanism</b> (bold text): a one-sentence hypothesis for how this variant causes its effect. <b>Summary</b>: 3-5 sentences covering which features were disrupted vs preserved, what the attribution reveals, and how clinical predictors agree or disagree. <b>Confidence</b>: high = consistent strong signals across multiple evidence types; medium = some mixed signals; low = weak or contradictory evidence. <b>Key Evidence</b>: bullet points highlighting the most important signals that informed the interpretation.')}
+    <div class="section-title">Variant Interpretation <span class="interp-confidence ${cc}">${interp.confidence} confidence</span></div>
+    <div class="interp-mechanism">${interp.mechanism}</div>
+    <div class="interp-summary">${interp.summary}</div>
+    <div class="section-title" style="margin-top:12px;font-size:11px">Key Evidence</div>
+    <ul class="interp-evidence">${interp.key_evidence.map(e => `<li>${e}</li>`).join('')}</ul>
+    <div style="font-size:10px;color:var(--text-muted);margin-top:8px">Generated by ${interp.model || 'Claude'}</div>`;
+  container.style.display = '';
+}
+
+function fetchAnalysis(v) {
+  const container = document.getElementById('interp-container');
+  if (!container) return;
+
+  // Cancel any in-flight polling from a previous variant
+  if (analysisAbortController) analysisAbortController.abort();
+  analysisAbortController = new AbortController();
+  const signal = analysisAbortController.signal;
+
+  // Deployed mode: API Gateway analysis endpoint; local dev: serve.py interpret endpoint
+  const useApi = !!CONFIG.API_BASE;
+  const url = useApi
+    ? `${CONFIG.API_BASE}/variants/${encodeURIComponent(v.id)}/analysis`
+    : `/api/interpret/${encodeURIComponent(v.id)}`;
+
+  container.innerHTML = `<div class="interp-loading"><div class="interp-spinner"></div>Generating interpretation...</div>`;
+  container.style.display = '';
+
+  let attempt = 0;
+  const maxAttempts = 20;
+
+  function poll() {
+    if (signal.aborted) return;
+    attempt++;
+
+    fetch(url, { signal })
+      .then(r => {
+        if (signal.aborted) return null;
+
+        // Local dev mode: serve.py returns 200 with interpretation directly
+        if (!useApi) {
+          if (!r.ok) throw new Error(`${r.status}`);
+          return r.json().then(interp => {
+            if (interp && interp.status === 'ok') renderInterpretation(container, interp);
+            else container.style.display = 'none';
+          });
+        }
+
+        // Deployed mode: 200 = complete, 202 = poll again
+        if (r.status === 200) {
+          return r.json().then(data => {
+            if (data.result) renderInterpretation(container, data.result);
+            else container.style.display = 'none';
+          });
+        }
+        if (r.status === 202) {
+          if (attempt >= maxAttempts) {
+            container.innerHTML = `<div class="interp-loading" style="color:var(--text-muted)">Interpretation is taking longer than expected. Refresh the page to check again.</div>`;
+            return;
+          }
+          const delay = Math.min(2000 * Math.pow(1.5, attempt - 1), 30000);
+          container.innerHTML = `<div class="interp-loading"><div class="interp-spinner"></div>Generating interpretation...</div>`;
+          setTimeout(poll, delay);
+          return;
+        }
+        throw new Error(`${r.status}`);
+      })
+      .catch(e => {
+        if (e.name === 'AbortError') return;
+        container.style.display = 'none';
+      });
+  }
+
+  poll();
+}
+
+function renderVariant(v) {
+  const stars = v.stars > 0 ? ' ' + '\u2605'.repeat(v.stars) + '\u2606'.repeat(Math.max(0, 4 - v.stars)) : '';
+  const aa = v.substitution ? ` (${v.substitution})` : '';
+
+  // Format HGVS and position context
+  const hgvsp = v.hgvsp ? v.hgvsp.split(':').pop() : null;
+  const hgvsc = v.hgvsc ? v.hgvsc.split(':').pop() : null;
+  const posFormatted = v.pos != null ? v.pos.toLocaleString() : '?';
+  const exonStr = v.exon ? `exon ${v.exon}` : '';
+  const domainStr = Array.isArray(v.domains) ? v.domains.filter(d => !['PDB-ENSP_mappings','AFDB-ENSP_mappings','ENSP_mappings','Gene3D'].includes(d.db)).slice(0, 3).map(d => d.name || (d.id?.split(',')[0] || '?')).join(', ') : '';
+  const contextParts = [exonStr, domainStr].filter(Boolean);
+
+  // gnomAD frequency formatting
+  const af = v.gnomad;
+  const afStr = af != null && af > 0
+    ? (af < 0.0001 ? af.toExponential(1) : af.toFixed(4)) + ` (1 / ${Math.round(1/af).toLocaleString()})`
+    : af === 0 || af == null ? 'Not observed' : af.toFixed(4);
+  const afNote = af == null || af === 0 ? 'Absent from gnomAD'
+    : af > 0.05 ? 'Common (BA1)' : af > 0.01 ? 'Polymorphism (BS1)'
+    : af < 0.0001 ? 'Rare (supports PM2)' : '';
+
+  // LOEUF interpretation
+  const loeufStr = v.loeuf != null ? v.loeuf.toFixed(2) : null;
+  const loeufNote = v.loeuf != null
+    ? (v.loeuf < 0.35 ? 'highly constrained' : v.loeuf < 0.6 ? 'constrained' : v.loeuf < 1.0 ? 'tolerant' : 'unconstrained')
+    : null;
+
+  let html = `
+    <div class="card">
+      ${cardHelp('verdict', '<b>Variant Summary.</b> The first line shows the gene symbol, exon location, protein domain, and LOEUF (loss-of-function observed/expected upper bound fraction; lower = more constrained, &lt;0.35 highly intolerant to LoF). The second line shows genomic coordinates, HGVS coding/protein notation, and variant consequence. The <b>radar chart</b> shows the maximum disruption z-score across five biological categories (Protein, Structure, Regulatory, Domains, Region), giving a quick visual fingerprint of which functional areas are most affected. The ClinVar classification, review stars, and gnomAD allele frequency provide independent clinical context. The <b>predicted pathogenicity</b> score (0-100%) is computed by an Evo2 covariance probe trained on ClinVar pathogenic/benign labels.')}
+      <div class="verdict"><div class="verdict-info">
+        <div class="verdict-gene">${v.gene} &nbsp; <span style="font-size:14px;font-weight:400;color:var(--text-secondary)">${contextParts.join(' &nbsp;|&nbsp; ')}${v.loeuf != null ? `${contextParts.length ? ' &nbsp;|&nbsp; ' : ''}LOEUF: ${v.loeuf.toFixed(2)} (${loeufNote})` : ''}</span></div>
+        <div class="verdict-id" title="${v.id}">${v.chrom}:${v.vcf_pos ?? (v.pos+1)} ${v.ref}>${v.alt}${hgvsc ? ` &nbsp;|&nbsp; ${hgvsc}` : ''}${hgvsp ? ` &nbsp;|&nbsp; ${hgvsp}` : ''}${v.consequence ? ` &nbsp;|&nbsp; ${humanConsequence(v.consequence)}` : ''}</div>
+        <div class="verdict-meta">
+          ${labelBadge(v.label)}
+          ${stars ? `<span style="color:var(--accent)">${stars}</span>` : ''}
+          ${v.acmg?.length ? v.acmg.map(c => {
+            const col = c.startsWith('PVS') || c.startsWith('PS') ? '#c55' : c.startsWith('PM') ? '#c93' : c.startsWith('PP') ? '#888' : c.startsWith('BA') || c.startsWith('BS') ? '#27a' : c.startsWith('BP') ? '#888' : '#aaa';
+            return `<span style="font-size:10px;font-weight:600;color:${col};background:color-mix(in srgb, ${col} 12%, transparent);padding:1px 5px;border-radius:4px">${c}</span>`;
+          }).join(' ') : ''}
+          ${v.disease ? ` \u00b7 ${v.disease}` : ''}
+          ${v.origin ? ` \u00b7 ${v.origin}` : ''}
+          \u00b7 gnomAD AF: <b>${afStr}</b>${af != null && af > 0 && af < 0.0001 ? ` <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:#dfd;color:#384">Rare (supports PM2)</span>` : af > 0.01 ? ` <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:${af > 0.05 ? '#fdd' : '#fed'};color:${af > 0.05 ? '#944' : '#974'}">${af > 0.05 ? 'Common (BA1)' : 'Polymorphism (BS1)'}</span>` : ''}
+        </div>
+        ${v.review_status || v.n_submissions || v.last_evaluated ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+          ${v.review_status ? `Review: ${v.review_status}` : ''}
+          ${v.n_submissions ? ` \u00b7 ${v.n_submissions} submitter${v.n_submissions > 1 ? 's' : ''}` : ''}
+          ${v.last_evaluated ? ` \u00b7 evaluated ${v.last_evaluated}` : ''}
+        </div>` : ''}
+        ${v.clinical_features?.length ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+          ${v.clinical_features.map(f => `<span style="background:#f0ebe4;padding:1px 6px;border-radius:4px;margin-right:3px">${f}</span>`).join('')}
+        </div>` : ''}
+        <div class="verdict-links">
+          ${v.allele_id ? `<a href="https://www.ncbi.nlm.nih.gov/clinvar/?term=${v.allele_id}[alleleid]" target="_blank" rel="noopener">ClinVar</a>` : ''}
+          <a href="https://gnomad.broadinstitute.org/variant/${v.chrom}-${v.vcf_pos ?? (v.pos+1)}-${v.ref}-${v.alt}?dataset=gnomad_r4" target="_blank" rel="noopener">gnomAD</a>
+          ${v.rs_id ? `<a href="https://www.ncbi.nlm.nih.gov/snp/${v.rs_id}" target="_blank" rel="noopener">dbSNP</a>` : ''}
+          <a href="https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${v.chrom}:${v.vcf_pos ?? (v.pos+1)}" target="_blank" rel="noopener">UCSC</a>
+          ${v.swissprot ? `<a href="https://www.uniprot.org/uniprotkb/${v.swissprot.split('.')[0]}" target="_blank" rel="noopener">UniProt</a>` : `<a href="https://www.uniprot.org/uniprotkb?query=gene:${v.gene}+organism_id:9606" target="_blank" rel="noopener">UniProt</a>`}
+          ${v.gene_id ? `<a href="https://www.ensembl.org/Homo_sapiens/Gene/Summary?g=${v.gene_id}" target="_blank" rel="noopener">Ensembl</a>` : ''}
+          <a href="https://omim.org/search?search=${v.gene}" target="_blank" rel="noopener">OMIM</a>
+          <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${v.gene}" target="_blank" rel="noopener">GeneCards</a>
+        </div>
+      </div>
+      <div class="verdict-score">
+        <div class="score-label">Predicted<br>Pathogenicity</div>
+        <div class="number" style="color:${scoreColor(v.score)}">${(v.score * 100).toFixed(0)}%</div>
+      </div>
+      </div>
+    </div>`;
+
+  // --- AI Interpretation (on-demand via serve.py, hidden until ready) ---
+  html += `<div id="interp-container" class="card interp-card" style="display:none"></div>`;
+  // --- Flat lookups for predictors card ---
+  const gt = v.gt || {};
+  const effLookup = v.effect || {};
+
+  // --- Disruption Attribution (z-scored deltas) ---
+  const attrHeads = Array.isArray(v.attribution) ? v.attribution : [];
+  if (attrHeads.length) {
+    const maxZ = attrHeads.reduce((m, h) => Math.max(m, Math.abs(h.z || 0)), 1);
+    html += `<div class="card">${cardHelp('disruptions', '<b>Disruption Profile.</b> Each row represents a biological feature (e.g., helix structure, Pfam domain membership, chromatin state) predicted by an Evo2 probe head. <b>Left bars</b>: the probe prediction on the reference genome (faded, top) and variant genome (solid, bottom). Color indicates likelihood ratio from the training distribution: red = score is more common among pathogenic variants, blue = more common among benign, gray = neutral. <b>Right bar</b>: the delta (variant minus reference), centered at zero. Red = feature decreased by the mutation, green = feature increased. Width scales with z-score (standard deviations from the mean delta across 232K ClinVar variants). <b>Sigma label</b>: the z-score magnitude. Features above 2&sigma; are statistically unusual (p &lt; 0.05). Click any row to see the full population distribution for that feature. <b>Top Disruptions</b> shows the most affected features ranked by z-score. <b>All Disruptions</b> (expandable below) shows every quality-filtered feature grouped by category.')}<div class="section-title">Top Disruptions</div>
+      <div class="profile-legend" style="display:block">
+        <div>Left: ref (faded) / var (solid) &nbsp;\u2502&nbsp; ${colorLegend()}</div>
+        <div>Right: \u0394 (var \u2212 ref) &nbsp;\u2502&nbsp;
+          <span style="color:var(--negative)">\u25A0</span> decreased (\u2212)
+          <span style="color:var(--positive)">\u25A0</span> increased (+)</div>
+      </div>`;
+    for (const item of attrHeads) {
+      const d = extractDelta(v.disruption?.[item.name]);
+      html += disruptionRow({ key: item.name, delta: d.delta, ref: d.ref, var: d.var, gt: null, z: item.z || 0 });
+    }
+    // --- Raw Head Scores (inside attribution card) ---
+    let rawHtml = '';
+    rawHtml += `<div class="section-title" style="margin-top:16px">All Disruptions</div>`;
+    for (const [gname, keys] of Object.entries(globalData?.heads?.disruption || {})) {
+      const items = keys
+        .filter(k => v.disruption?.[k] != null)
+        .map(k => { const d = v.disruption[k]; const delta = Array.isArray(d) ? d[1] - d[0] : d; const s = globalData?.head_stats?.[k]; const zAbs = s?.std > 0 ? Math.abs((delta - s.mean) / s.std) : 0; return {key: k, delta, ref: Array.isArray(d) ? d[0] : null, var: Array.isArray(d) ? d[1] : null, gt: v.gt?.[k], _z: zAbs}; })
+        .sort((a, b) => b._z - a._z);
+      if (items.length) rawHtml += renderGroup(gname, items, disruptionRow, 'ref');
+    }
+    rawHtml += `<div class="section-title" style="margin-top:16px">Variant Effects</div>
+      <div class="profile-legend">Variant-level effect predictions (from diff view). ${colorLegend()}</div>`;
+    for (const [gname, keys] of Object.entries(globalData?.heads?.effect || {})) {
+      const items = keys
+        .filter(k => v.effect?.[k] != null && !k.startsWith('pfam_'))
+        .map(k => ({key: k, val: v.effect[k], gt: null}))
+        .sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
+      if (items.length) rawHtml += renderGroup(gname, items, effectRow, 'eff');
+    }
+    html += `<div id="raw-heads-content" style="display:none">${rawHtml}</div>
+      <div class="show-more" style="text-align:center;padding:8px;font-size:12px;color:var(--accent);cursor:pointer" onclick="const el=document.getElementById('raw-heads-content');el.style.display=el.style.display==='none'?'block':'none';this.textContent=el.style.display==='none'?'Show all disruptions':'Hide all disruptions'">Show all disruptions</div>`;
+    html += `</div>`;
+  }
+
+  // --- Computational Predictors card ---
+  // Database values (actual tool outputs) take priority; probe predictions as fallback
+  const predictors = [
+    {name: 'PhyloP 100-way', key: 'phylop_100way', threshold: 0.5, invert: false, desc: 'Evolutionary conservation across 100 vertebrate species'},
+    {name: 'PhastCons 100-way', key: 'phastcons_100way', threshold: 0.5, invert: false, desc: 'Probability the position is in a conserved element'},
+    {name: 'GERP', key: 'gerp_c', threshold: 0.5, invert: false, desc: 'Genomic evolutionary rate profiling constraint score'},
+    {name: 'CADD', key: 'cadd_c', threshold: 0.333, invert: false, desc: 'Combined annotation-dependent depletion score'},
+    {name: 'AlphaMissense', key: 'alphamissense_c', threshold: 0.564, invert: false, desc: 'Deep learning missense pathogenicity predictor'},
+    {name: 'REVEL', key: 'revel_c', threshold: 0.5, invert: false, desc: 'Rare exome variant ensemble learner'},
+    {name: '1 \u2212 SIFT', key: 'sift_c', threshold: 0.05, invert: true, desc: 'Sequence homology-based tolerance (inverted: higher = more damaging)'},
+    {name: 'PolyPhen-2', key: 'polyphen_c', threshold: 0.85, invert: false, desc: 'Structure and sequence-based damage prediction'},
+    {name: 'EVE', key: 'eve_c', threshold: 0.5, invert: false, desc: 'Evolutionary model of variant effect from sequence alignments'},
+    {name: 'SpliceAI', key: 'spliceai_max_c', threshold: 0.2, invert: false, desc: 'Deep learning splice site disruption predictor'},
+  ];
+  // 5-tier color: score → color (for non-inverted: high = pathogenic)
+  function tierColor(val, invert) {
+    const v = invert ? 1 - val : val;
+    if (v >= 0.8) return '#c55';       // strong pathogenic
+    if (v >= 0.6) return '#DB8A48';     // likely pathogenic
+    if (v >= 0.4) return '#bbb';        // uncertain
+    if (v >= 0.2) return '#6ac';        // likely benign
+    return '#27a';                       // strong benign
+  }
+  const predRows = predictors.map(p => {
+    const dbVal = gt[p.key];
+    const probeVal = effLookup[p.key];
+    if (dbVal == null && probeVal == null) return null;
+    const primary = dbVal ?? probeVal;
+    const damaging = p.invert ? primary < p.threshold : primary > p.threshold;
+    return {name: p.name, key: p.key, db: dbVal, probe: probeVal, primary, damaging, desc: p.desc, invert: p.invert};
+  }).filter(Boolean);
+
+  if (predRows.length > 1) {
+    const nDam = predRows.filter(r => r.damaging).length;
+    const consensus = nDam > predRows.length / 2 ? 'deleterious' : 'benign';
+    html += `<div class="card">
+      ${cardHelp('predictors', '<b>Computational Predictors.</b> Scores from established clinical variant assessment tools, displayed on a 0-1 scale where higher = more pathogenic for all predictors. <b>Conservation</b>: PhyloP (per-base conservation across 100 vertebrates), PhastCons (probability of conserved element), GERP (evolutionary rate constraint). <b>Pathogenicity</b>: CADD (combined annotation-dependent depletion), AlphaMissense (deep learning missense predictor), REVEL (rare exome variant ensemble). <b>Functional</b>: 1&minus;SIFT (inverted so higher = damaging), PolyPhen-2 (structure-based), EVE (evolutionary model), SpliceAI (splice disruption). Values without an asterisk are actual database scores from VEP annotation. Values with <sup>*</sup> are Evo2&rsquo;s internal predictions of what those tools would score, learned purely from DNA sequence context. Bar color reflects pathogenicity likelihood from the training distribution.')}
+      <div class="section-title">Computational Predictors</div>
+      <div class="profile-legend">${colorLegend()}</div>
+      ${predRows.map(r => {
+        const val = r.primary;
+        const displayVal = r.invert ? 1 - val : val;
+        const color = tierColor(val, r.invert);
+        const src = r.db != null ? '' : '<sup style="font-size:8px;color:var(--text-muted)">*</sup>';
+        const pIcon = r.desc ? ` <span class="info-icon" data-desc="${escAttr(r.desc)}">i</span>` : '';
+        return `<div class="profile-row">
+          <div class="profile-label">${r.name}${pIcon}</div>
+          <div class="profile-bar-container">
+            <div class="profile-bar" style="width:${Math.max(2, displayVal * 100)}%;background:${color}"></div>
+          </div>
+          <div class="profile-value" style="color:${color};font-weight:600;text-align:left">${displayVal.toFixed(2)}${src}</div>
+        </div>`;
+      }).join('')}
+      <div style="font-size:11px;color:var(--text-muted);margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
+        Consensus: <b>${nDam}/${predRows.length}</b> ${consensus} ${nDam > predRows.length / 2 ? '(supports PP3)' : '(supports BP4)'}
+        ${predRows.some(r => r.db == null) ? '<br>* predicted by Evo2 (no database value available)' : ''}
+      </div>
+    </div>`;
+  }
+
+  // --- Nearest Neighbors ---
+  html += `<div class="card">${cardHelp('neighbors', '<b>Nearest Neighbors.</b> The 10 most similar variants found by cosine similarity in Evo2&rsquo;s probe activation embedding space (not sequence similarity). <b>Similarity</b>: cosine similarity percentage (100% = identical embedding). <b>Score</b>: each neighbor&rsquo;s predicted pathogenicity. The summary line shows how many neighbors are pathogenic, benign, or VUS, providing independent evidence for classification. A variant surrounded mostly by pathogenic neighbors is more likely pathogenic itself. Click any row to navigate to that variant&rsquo;s full card.')}<div class="section-title">Nearest Neighbors</div>`;
+  if (v.label === 'VUS' && v.neighbors.length) {
+    const ch = v.nP > v.nB * 2 ? 'predominantly pathogenic' : v.nB > v.nP * 2 ? 'predominantly benign' : 'mixed';
+    const cc = ch.includes('pathogenic') ? 'var(--negative)' : ch.includes('benign') ? '#27a' : 'var(--text-secondary)';
+    html += `<div class="vus-callout">This variant is <b>unclassified (VUS)</b>. Its nearest neighbors suggest <b style="color:${cc}">${ch}</b> character.</div>`;
+  }
+  html += `<div class="neighbor-summary"><strong>${v.nP}</strong> pathogenic, <strong>${v.nB}</strong> benign, <strong>${v.nV}</strong> VUS among ${v.neighbors.length} closest</div>
+    <table><tr><th>Variant</th><th>Gene</th><th>Consequence</th><th>Label</th><th>Score</th><th>Sim</th></tr>`;
+  for (const nb of v.neighbors) {
+    const cls = nb.label.includes('pathogenic') ? 'pathogenic' : nb.label.includes('benign') ? 'benign' : '';
+    html += `<tr class="${cls}" style="cursor:pointer" onclick="navigate('variant/${nb.id}')">
+      <td class="mono" title="${nb.id}">${truncate(nb.id)}</td><td>${nb.gene}</td><td>${humanConsequence(nb.consequence)}</td>
+      <td>${labelBadge(nb.label)}</td><td class="mono">${(nb.score * 100).toFixed(0)}%</td>
+      <td class="mono">${(nb.similarity * 100).toFixed(0)}%</td></tr>`;
+  }
+  html += '</table></div>';
+  html += `<div class="card">${cardHelp('distribution', '<b>Score Distribution.</b> Histogram of predicted pathogenicity scores across all 232K labeled ClinVar variants. Blue bars = benign-labeled variants, red bars = pathogenic-labeled variants. The vertical black line marks this variant&rsquo;s predicted score. Good separation between the blue and red distributions indicates the probe discriminates well. A variant scoring in the overlap region has more ambiguous evidence.')}<div class="section-title">Score Distribution</div>
+    <div class="distribution-container"><canvas id="dist-chart"></canvas></div></div>`;
+
+  // (Raw Head Scores moved inside attribution card above)
+
+  // --- Population Frequency card (bottom, detail-level) ---
+  const hasFreq = v.gnomad_pop && Object.values(v.gnomad_pop).some(f => f != null && f > 0);
+  if (hasFreq) {
+    const pops = [['afr','African'],['amr','American'],['asj','Ashkenazi'],['eas','East Asian'],['fin','Finnish'],['nfe','European'],['sas','South Asian']];
+    const maxAF = Math.max(...pops.map(([k]) => v.gnomad_pop[k] || 0), 1e-6);
+    html += `<div class="card">
+      <div class="section-title">Population Frequency</div>
+      <div style="font-size:13px;margin-bottom:10px">gnomAD exome: <b>${afStr}</b>${afNote ? ` \u00b7 <span style="color:var(--text-muted)">${afNote}</span>` : ''}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;font-size:12px">
+        ${pops.map(([k, label]) => {
+          const f = v.gnomad_pop[k];
+          const w = f && f > 0 ? Math.max(2, (f / maxAF) * 100) : 0;
+          const fStr = f && f > 0 ? (f < 0.0001 ? f.toExponential(1) : f.toFixed(5)) : '0';
+          return `<div style="display:flex;align-items:center;gap:6px">
+            <span style="width:70px;color:var(--text-secondary);flex-shrink:0">${label}</span>
+            <span style="flex:1;height:8px;background:#f0ebe4;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:var(--accent);border-radius:3px"></span></span>
+            <span style="width:60px;text-align:right;font-family:monospace;font-size:10px;color:var(--text-muted)">${fStr}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  content.innerHTML = html;
+  renderDistChart(v);
+  fetchAnalysis(v);
+
+}
+
+let radarChart = null;
+function renderRadarChart(v) {
+  const el = document.getElementById('radar-chart');
+  if (!el || !globalData?.heads?.disruption) return;
+  const categories = Object.entries(globalData.heads.disruption);
+  const labels = categories.map(([cat]) => cat);
+  const values = categories.map(([, keys]) => {
+    let maxZ = 0;
+    for (const k of keys) {
+      const d = extractDelta(v.disruption?.[k]);
+      const s = globalData.head_stats?.[k];
+      if (s?.std > 0) maxZ = Math.max(maxZ, Math.abs((d.delta - s.mean) / s.std));
+    }
+    return Math.round(maxZ * 10) / 10;
+  });
+  const maxVal = Math.max(1, ...values) * 1.2;
+  if (radarChart) radarChart.destroy();
+  radarChart = new Chart(el.getContext('2d'), {
+    type: 'radar',
+    data: { labels, datasets: [{
+      data: values, fill: true,
+      backgroundColor: 'rgba(219,138,72,0.15)',
+      borderColor: 'rgba(219,138,72,0.7)',
+      borderWidth: 1.5, pointRadius: 3,
+      pointBackgroundColor: values.map(v => v >= 2 ? '#c55' : v >= 1 ? '#DB8A48' : '#bbb'),
+    }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      scales: { r: {
+        beginAtZero: true, max: maxVal,
+        ticks: { stepSize: 1, font: { size: 8 }, backdropColor: 'transparent', callback: v => v > 0 && v % 3 === 0 ? v + '\u03C3' : '' },
+        pointLabels: { font: { size: 9 } },
+        grid: { color: 'rgba(0,0,0,0.06)' },
+        angleLines: { color: 'rgba(0,0,0,0.06)' },
+      }},
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+function renderDistChart(v) {
+  const distributionData = distributions?.pathogenic;
+  if (!distributionData) return;
+  const el = document.getElementById('dist-chart'); if (!el) return;
+  const bins = distributionData.bins;
+  if (distChart) distChart.destroy();
+  const mb = Math.min(bins - 1, Math.max(0, Math.floor(v.score * bins)));
+  distChart = new Chart(el.getContext('2d'), {
+    type: 'bar',
+    data: { labels: Array.from({length: bins}, (_, i) => `${(i / bins * 100).toFixed(0)}%`),
+      datasets: [
+        { label: 'Benign', data: distributionData.benign, backgroundColor: 'rgba(34,119,170,0.4)', borderWidth: 0 },
+        { label: 'Pathogenic', data: distributionData.pathogenic, backgroundColor: 'rgba(204,85,85,0.4)', borderWidth: 0 },
+      ] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      scales: { x: { ticks: { maxTicksLimit: 10 } }, y: {} },
+      plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } } },
+    plugins: [{ id: 'dm', afterDraw(chart) {
+      const meta = chart.getDatasetMeta(0); if (!meta.data[mb]) return;
+      const c = chart.ctx; c.save(); c.beginPath();
+      c.moveTo(meta.data[mb].x, chart.chartArea.top); c.lineTo(meta.data[mb].x, chart.chartArea.bottom);
+      c.strokeStyle = '#333'; c.lineWidth = 2.5; c.stroke();
+      c.font = '11px sans-serif'; c.fillStyle = '#333';
+      const tx = meta.data[mb].x, lbl = 'This variant', tw = c.measureText(lbl).width;
+      c.fillText(lbl, tx + tw + 8 > chart.chartArea.right ? tx - tw - 4 : tx + 4, chart.chartArea.top + 12);
+      c.restore();
+    }}],
+  });
+}
+</script>
+</body>
+</html>
