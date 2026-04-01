@@ -106,8 +106,24 @@ def build_prompt(v: dict) -> str:
     for heads in curated_dis.values():
         curated_dis_heads.update(heads)
 
+    # Load head stats for z-score computation
+    import json as _json
+    _stats_path = Path("head_stats.json")
+    if not _stats_path.exists():
+        # Try loading from global.json in any recent build
+        import glob as _glob
+        for gp in sorted(_glob.glob("/tmp/variant_viewer_*/global.json"), reverse=True):
+            _g = _json.loads(Path(gp).read_text())
+            if "head_stats" in _g:
+                _head_stats = _g["head_stats"]
+                break
+        else:
+            _head_stats = {}
+    else:
+        _head_stats = _json.loads(_stats_path.read_text())
+
     if disruption and curated_dis_heads:
-        # Filter and sort by |delta|
+        # Filter, compute z-scores, sort by |z|
         filtered = []
         for name, val in disruption.items():
             if name not in curated_dis_heads:
@@ -120,18 +136,22 @@ def build_prompt(v: dict) -> str:
                 ref_val = var_val = None
             else:
                 continue
-            filtered.append((name, ref_val, var_val, delta))
-        filtered.sort(key=lambda x: abs(x[3]), reverse=True)
+            s = _head_stats.get(name, {})
+            z = (delta - s.get("mean", 0)) / s["std"] if s.get("std", 0) > 0 else 0.0
+            filtered.append((name, ref_val, var_val, delta, z))
+        filtered.sort(key=lambda x: abs(x[4]), reverse=True)
 
-        lines.append(f"### Disruption Profile ({len(filtered)} heads, ranked by |delta|)")
-        lines.append("| Feature | ref | var | delta | Database |")
-        lines.append("|---------|-----|-----|-------|----------|")
-        for name, ref_val, var_val, delta in filtered:
+        lines.append(f"### Disruption Profile ({len(filtered)} heads, ranked by |z-score|)")
+        lines.append("Features with |z| > 2σ are nominally significant (p < 0.05).")
+        lines.append("| Feature | ref | var | delta | z-score | Database |")
+        lines.append("|---------|-----|-----|-------|---------|----------|")
+        for name, ref_val, var_val, delta, z in filtered:
             ref_str = f"{ref_val:.3f}" if ref_val is not None else ""
             var_str = f"{var_val:.3f}" if var_val is not None else ""
             gt_val = gt.get(name)
             gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""
-            lines.append(f"| {display_name(name)} | {ref_str} | {var_str} | {delta:+.3f} | {gt_str} |")
+            sig = " **" if abs(z) >= 2 else ""
+            lines.append(f"| {display_name(name)} | {ref_str} | {var_str} | {delta:+.3f} | {z:+.1f}\u03c3{sig} | {gt_str} |")
         lines.append("")
 
     if effect:
