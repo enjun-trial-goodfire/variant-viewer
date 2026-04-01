@@ -72,13 +72,14 @@ GNOMAD_COLS = (
 
 
 
-def prebin(values: torch.Tensor, n_bins: int = 40) -> list[int]:
-    """Histogram of [0, 1) values into n_bins bins."""
+def prebin(values: torch.Tensor, n_bins: int = 40, lo: float = 0.0, hi: float = 1.0) -> list[int]:
+    """Histogram of values into n_bins bins over [lo, hi)."""
     v = values[~values.isnan()]
     if v.numel() == 0:
         return [0] * n_bins
+    mapped = ((v - lo) / (hi - lo) * n_bins).long()
     return torch.bincount(
-        torch.clamp((v * n_bins).long(), 0, n_bins - 1), minlength=n_bins
+        torch.clamp(mapped, 0, n_bins - 1), minlength=n_bins
     ).tolist()
 
 
@@ -124,14 +125,14 @@ def load_data() -> tuple[pl.DataFrame, dict]:
 
     # Join labeled scores
     scores_l = pl.read_ipc(str(LABELED / PROBE / "scores.feather"))
-    labeled = variants.filter(pl.col("label") != "VUS")
+    labeled = variants.filter(pl.col("label").str.to_lowercase() != "vus")
     parts = [scores_l.join(labeled, on="variant_id", how="left")]
 
     # Join VUS scores (if available)
     vus_path = VUS / PROBE / "scores.feather"
     if vus_path.exists():
         scores_v = pl.read_ipc(str(vus_path))
-        vus = variants.filter(pl.col("label") == "VUS")
+        vus = variants.filter(pl.col("label").str.to_lowercase() == "vus")
         parts.append(scores_v.join(vus, on="variant_id", how="left"))
     else:
         logger.warning(f"No VUS scores at {vus_path}, building labeled-only")
@@ -522,17 +523,50 @@ def write_global(
                 "std": round(valid.std().item(), 5),
             }
 
-    # Remap delta heads from [-1,1] -> [0,1] for histogram binning
-    score_matrix[:n_disruption] = (score_matrix[:n_disruption] + 1) / 2
+    # Ref-view score histograms for disruption heads (for dual histogram display)
+    ref_matrix = torch.from_numpy(
+        df.select(list(ref_cols)).to_numpy(allow_copy=True).T
+    ).float()  # (n_disruption, n_variants) — values in [0, 1]
+
+    def _adaptive_range(vals: torch.Tensor) -> tuple[float, float]:
+        """Compute adaptive bin range from 0.5th-99.5th percentile with 5% padding."""
+        valid = vals[~vals.isnan()]
+        if len(valid) < 10:
+            return 0.0, 1.0
+        lo = valid.quantile(0.005).item()
+        hi = valid.quantile(0.995).item()
+        pad = max((hi - lo) * 0.05, 1e-6)
+        return lo - pad, hi + pad
 
     hh = {}
     for j, head_name in enumerate(all_head_names):
-        hh[head_name] = {
-            "benign": prebin(score_matrix[j][ben_mask], 40),
-            "pathogenic": prebin(score_matrix[j][path_mask], 40),
-            "bins": 40,
-            "range": [-1, 1] if j < n_disruption else [0, 1],
-        }
+        if j < n_disruption:
+            # Disruption head: adaptive ranges for both delta and ref
+            raw_delta = score_matrix[j]
+            d_lo, d_hi = _adaptive_range(raw_delta)
+            raw_ref = ref_matrix[j]
+            r_lo, r_hi = _adaptive_range(raw_ref)
+            hh[head_name] = {
+                "delta": {
+                    "benign": prebin(raw_delta[ben_mask], 40, d_lo, d_hi),
+                    "pathogenic": prebin(raw_delta[path_mask], 40, d_lo, d_hi),
+                    "bins": 40, "range": [round(d_lo, 4), round(d_hi, 4)],
+                },
+                "ref": {
+                    "benign": prebin(raw_ref[ben_mask], 40, r_lo, r_hi),
+                    "pathogenic": prebin(raw_ref[path_mask], 40, r_lo, r_hi),
+                    "bins": 40, "range": [round(r_lo, 4), round(r_hi, 4)],
+                },
+            }
+        else:
+            # Effect head: adaptive range
+            raw_eff = score_matrix[j]
+            e_lo, e_hi = _adaptive_range(raw_eff)
+            hh[head_name] = {
+                "benign": prebin(raw_eff[ben_mask], 40, e_lo, e_hi),
+                "pathogenic": prebin(raw_eff[path_mask], 40, e_lo, e_hi),
+                "bins": 40, "range": [round(e_lo, 4), round(e_hi, 4)],
+            }
 
     eval_metrics = {}
     eval_path = LABELED / PROBE / "eval.json"
@@ -586,6 +620,10 @@ def write_global(
 
     # ── Copy static files ────────────────────────────────────────────────
     shutil.copy2(Path(__file__).parent / "index.html", staging / "index.html")
+    logos_dir = Path(__file__).parent / "logos"
+    if logos_dir.exists():
+        for f in logos_dir.iterdir():
+            shutil.copy2(f, staging / f.name)
     interp_src = VUS / "interpretations"
     if interp_src.exists():
         interp_dst = staging / "interpretations"
@@ -641,11 +679,10 @@ def main(
     # ── Load ─────────────────────────────────────────────────────────────
     _t("Loading...")
     df, cfg = load_data()
+    df_full = df  # keep full df for neighbor/UMAP metadata
     if dev:
         df = df.head(dev)
-        umap = False
-        neighbors = False
-        logger.info(f"Dev mode: {dev} variants, skipping UMAP + neighbors")
+        logger.info(f"Dev mode: {dev} variants")
     heads_meta = load_heads()
     # Build domain cache from Pfam heads for resolve_domains()
     domain_cache = {}
@@ -667,11 +704,11 @@ def main(
 
         if neighbors:
             _t("GPU cosine similarity...")
-            nb_map = compute_neighbors(emb, emb_ids, df, k=K_NEIGHBORS)
+            nb_map = compute_neighbors(emb, emb_ids, df_full, k=K_NEIGHBORS)
 
         if umap:
             _t("UMAP...")
-            umap_data = compute_umap(emb, emb_ids, df)
+            umap_data = compute_umap(emb, emb_ids, df_full)
     else:
         _t("Skipping embeddings (use --neighbors or --umap to enable)")
 
