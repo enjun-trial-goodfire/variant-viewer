@@ -13,11 +13,6 @@ SYSTEM_PROMPT = """\
 You are a clinical genomics expert interpreting variant pathogenicity predictions \
 from Evo2, a 7-billion-parameter DNA foundation model.
 
-Background: Evo2 achieves 0.97 AUROC on a deconfounded ClinVar benchmark, matching \
-or exceeding CADD and AlphaMissense across all variant types. ClinVar-trained probes \
-generalize to deep mutational scanning experiments (BRCA1, BRCA2, TP53, LDLR), \
-confirming the model captures genuine biology.
-
 The system uses a probe trained on reference genome activations, then run on BOTH \
 reference and variant activations. For each biological feature (helix, conservation, \
 domain membership, etc.), you see:
@@ -29,23 +24,18 @@ Large negative deltas mean the variant disrupts that feature. Near-zero deltas m
 the feature is preserved. This is the key signal: pathogenic variants show large \
 disruptions, benign variants show near-zero deltas.
 
-A separate **diff probe** predicts what existing clinical tools (CADD, AlphaMissense, \
-REVEL, SpliceAI, etc.) would score for this variant. These are NOT external lookups — \
-they are Evo2's internal predictions of what those tools would say, based purely on DNA \
-sequence context.
-
 A **disruption attribution** (z-scored deltas vs the population of 184K ClinVar variants) \
 identifies which features this variant disrupts most unusually. A z-score of -5σ on \
 "helix structure" means this variant's helix disruption is 5 standard deviations beyond \
-the population mean — highly informative. Near-zero z-scores are noise.
+the population mean. Near-zero z-scores are noise.
 
 Provide a clinical interpretation:
 - Lead with the disruption story: which features were disrupted (large Δ) and which were preserved
+- Use the gene function context to explain WHY disruption of those features matters for this gene
 - Use the attribution to explain WHY the model predicts what it does
-- Note any disagreements between pathogenicity and predicted clinical scores
-- Nearest neighbor consensus is strong independent evidence
 - When z-scores are high but deltas are small (<0.02), say so plainly: "statistically unusual but small in magnitude"
 - Be skeptical of high z-scores on chromatin/epigenomic features for coding variants: these often reflect indirect correlations, not causal mechanisms
+- Do NOT reference clinical prediction tools (CADD, AlphaMissense, SIFT, PolyPhen, etc.)
 - 3-5 sentences for summary, 1 sentence for mechanism
 
 Writing style:
@@ -79,15 +69,6 @@ def build_prompt(v: dict) -> str:
         if hgvsc:
             parts.append(f"Coding: {hgvsc}")
         lines.append("  |  ".join(parts))
-
-    # Label context
-    label = v.get("label", "?")
-    if label != "VUS":
-        lines.append(f"ClinVar: {label} ({v.get('significance', '')}), {v.get('stars', '?')} stars")
-    else:
-        lines.append("ClinVar: VUS (Variant of Uncertain Significance)")
-    if v.get("disease"):
-        lines.append(f"Disease: {v['disease']}")
 
     lines.append(f"**Predicted pathogenicity: {score * 100:.0f}%**")
     cal = calibration_text(score)
@@ -168,15 +149,6 @@ def build_prompt(v: dict) -> str:
                 gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""
                 lines.append(f"| {display_name(name)} | {val:.3f} | {gt_str} |")
             lines.append("")
-
-    # Neighbors
-    neighbors = v.get("neighbors", [])
-    if neighbors:
-        lines.append(f"### Nearest Neighbors: {v.get('nP', 0)} pathogenic, {v.get('nB', 0)} benign, {v.get('nV', 0)} VUS")
-        for nb in neighbors[:5]:
-            sim = nb.get("similarity", 0)
-            lines.append(f"- {nb['gene']} ({nb['label']}, pathogenicity={nb['score'] * 100:.0f}%, similarity={sim * 100:.0f}%)")
-        lines.append("")
 
     # Additional context
     context_parts = []
