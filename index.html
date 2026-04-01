@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EVEE — Evo Variant Effect Explorer</title>
+<script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root {
@@ -237,6 +238,15 @@ tr.benign td { background: #f5f8fe; }
 <div id="umap-tooltip"></div>
 
 <script>
+// ── Config ──────────────────────────────────────────────────────────
+// config.js (if present) sets window.__APP_CONFIG__ before this runs.
+// API_BASE set → API mode (deployed, hits API Gateway + DynamoDB)
+// API_BASE empty → static mode (local dev, reads JSON files via serve.py)
+const CONFIG = Object.assign({
+  STATIC_BASE: '',
+  API_BASE: '',
+}, window.__APP_CONFIG__ || {});
+
 // ── State ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('search');
 const searchResults = document.getElementById('search-results');
@@ -245,6 +255,7 @@ const tooltip = document.getElementById('umap-tooltip');
 
 let distributions = null, umapData = null, distChart = null, currentVariant = null;
 let globalData = null, searchIndex = null, searchIndexPromise = null;
+let analysisAbortController = null;
 const detailCharts = {};
 const LABEL_NAMES = ['benign', 'pathogenic', 'VUS'];
 const COLLAPSE_THRESHOLD = 5;
@@ -346,20 +357,35 @@ function cardHelp(id, text) {
 // ── Data loading ─────────────────────────────────────────────────────
 // global.json (~300KB): distributions, heads, display, eval. Always needed.
 // umap.json (~2.3MB): only loaded when the landing page is shown.
-const globalReady = fetch('global.json').then(r => r.json()).then(g => {
+const staticPrefix = CONFIG.STATIC_BASE ? CONFIG.STATIC_BASE + '/' : '';
+const globalReady = fetch(`${staticPrefix}global.json`).then(r => r.json()).then(g => {
   distributions = g.distributions;
   globalData = { heads: g.heads, display: g.display, eval: g.eval, descriptions: g.descriptions || {}, head_stats: g.head_stats || {} };
+  if (g.umap) umapData = g.umap;
   if (document.getElementById('dist-chart') && currentVariant) renderDistChart(currentVariant);
 });
 let umapReady = null;
 function ensureUmap() {
-  umapReady ??= fetch('umap.json').then(r => r.ok ? r.json() : null).then(u => { umapData = u; });
+  umapReady ??= fetch(`${staticPrefix}umap.json`).then(r => r.ok && (r.headers.get('content-type') || '').includes('json') ? r.json() : null).then(u => { if (u) umapData = u; });
   return umapReady;
 }
 
+// Static mode: client-side search via search.json
 function ensureSearchIndex() {
-  searchIndexPromise ??= fetch('search.json').then(r => r.json()).then(idx => { searchIndex = idx; });
+  searchIndexPromise ??= fetch('search.json').then(r => {
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return {};
+    return r.json();
+  }).then(idx => { searchIndex = idx; });
   return searchIndexPromise;
+}
+
+// API mode: server-side search via GET /variants/search
+async function apiSearch(query) {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const resp = await fetch(`${CONFIG.API_BASE}/variants/search?q=${encodeURIComponent(q)}`);
+  if (!resp.ok) return [];
+  return resp.json();
 }
 
 // ── Routing ──────────────────────────────────────────────────────────
@@ -399,14 +425,22 @@ searchInput.addEventListener('input', () => {
     searchResults.classList.remove('visible');
     navigate(`variant/${q}`); return;
   }
-  searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+  if (CONFIG.API_BASE) {
+    searchTimeout = setTimeout(() => apiSearch(q).then(r => renderSearchResults(r)), 300);
+  } else {
+    searchTimeout = setTimeout(() => ensureSearchIndex().then(() => renderSearchResults(clientSearch(q))), 150);
+  }
 });
 searchInput.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const q = searchInput.value.trim();
   searchResults.classList.remove('visible');
   if (q.includes(':') && q.split(':').length >= 4) navigate(`variant/${q}`);
-  else ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+  else if (CONFIG.API_BASE) {
+    apiSearch(q).then(r => { if (r.length) navigate(`variant/${r[0].v}`); });
+  } else {
+    ensureSearchIndex().then(() => { const r = clientSearch(q); if (r.length) navigate(`variant/${r[0].v}`); });
+  }
 });
 document.addEventListener('click', e => {
   if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
@@ -681,7 +715,7 @@ function showLanding() {
         ${umapMode === 'predicted' ? scoreLeg : labelLeg}
       </div>
     </div>`;
-    ensureUmap().then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
+    Promise.all([globalReady, ensureUmap()]).then(() => { if (umapData && document.getElementById('umap-container')) renderUmap(); });
   });
 }
 
@@ -769,7 +803,10 @@ function loadVariant(variantId) {
   searchResults.classList.remove('visible');
   tooltip.style.display = 'none';
   searchInput.value = variantId;
-  const variantReady = fetch(`variants/${safeVariantId(variantId)}.json`)
+  const variantUrl = CONFIG.API_BASE
+    ? `${CONFIG.API_BASE}/variants/${encodeURIComponent(variantId)}`
+    : `variants/${safeVariantId(variantId)}.json`;
+  const variantReady = fetch(variantUrl)
     .then(r => { if (!r.ok) throw new Error(); return r.json(); });
   Promise.all([variantReady, globalReady])
     .then(([v]) => { currentVariant = v; viewTransition(() => renderVariant(v)); })
@@ -798,10 +835,67 @@ function renderInterpretation(container, interp) {
 function fetchAnalysis(v) {
   const container = document.getElementById('interp-container');
   if (!container) return;
-  fetch(`/api/interpret/${encodeURIComponent(v.id)}`)
-    .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
-    .then(interp => { if (interp && interp.status === 'ok') renderInterpretation(container, interp); })
-    .catch(() => {});
+
+  // Cancel any in-flight polling from a previous variant
+  if (analysisAbortController) analysisAbortController.abort();
+  analysisAbortController = new AbortController();
+  const signal = analysisAbortController.signal;
+
+  // Deployed mode: API Gateway analysis endpoint; local dev: serve.py interpret endpoint
+  const useApi = !!CONFIG.API_BASE;
+  const url = useApi
+    ? `${CONFIG.API_BASE}/variants/${encodeURIComponent(v.id)}/analysis`
+    : `/api/interpret/${encodeURIComponent(v.id)}`;
+
+  container.innerHTML = `<div class="interp-loading"><div class="interp-spinner"></div>Generating interpretation...</div>`;
+  container.style.display = '';
+
+  let attempt = 0;
+  const maxAttempts = 20;
+
+  function poll() {
+    if (signal.aborted) return;
+    attempt++;
+
+    fetch(url, { signal })
+      .then(r => {
+        if (signal.aborted) return null;
+
+        // Local dev mode: serve.py returns 200 with interpretation directly
+        if (!useApi) {
+          if (!r.ok) throw new Error(`${r.status}`);
+          return r.json().then(interp => {
+            if (interp && interp.status === 'ok') renderInterpretation(container, interp);
+            else container.style.display = 'none';
+          });
+        }
+
+        // Deployed mode: 200 = complete, 202 = poll again
+        if (r.status === 200) {
+          return r.json().then(data => {
+            if (data.result) renderInterpretation(container, data.result);
+            else container.style.display = 'none';
+          });
+        }
+        if (r.status === 202) {
+          if (attempt >= maxAttempts) {
+            container.innerHTML = `<div class="interp-loading" style="color:var(--text-muted)">Interpretation is taking longer than expected. Refresh the page to check again.</div>`;
+            return;
+          }
+          const delay = Math.min(2000 * Math.pow(1.5, attempt - 1), 30000);
+          container.innerHTML = `<div class="interp-loading"><div class="interp-spinner"></div>Generating interpretation...</div>`;
+          setTimeout(poll, delay);
+          return;
+        }
+        throw new Error(`${r.status}`);
+      })
+      .catch(e => {
+        if (e.name === 'AbortError') return;
+        container.style.display = 'none';
+      });
+  }
+
+  poll();
 }
 
 function renderVariant(v) {
