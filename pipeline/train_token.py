@@ -136,22 +136,21 @@ def train(
             labels_chunk = labels_ds.load_chunk(chunk_id)
 
             B = acts_chunk.acts.shape[0]
-            raw = acts_chunk.acts.float().to(device, non_blocking=True)
 
-            # Unpack ref view: [B, 2, 3, 256, 4096] → fwd+bwd ref → [B, 256, 8192]
+            # Unpack on CPU first to avoid putting full [B, 2, 3, 256, 4096] on GPU
+            raw = acts_chunk.acts.float()  # CPU
             acts = raw.reshape(B, 2, 3, 256, 4096)
-            fwd_ref = acts[:, 0, 1]  # [B, 256, 4096]
-            bwd_ref = acts[:, 1, 1]  # [B, 256, 4096]
-            token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192]
+            fwd_ref = acts[:, 0, 1]  # [B, 256, 4096] CPU
+            bwd_ref = acts[:, 1, 1]  # [B, 256, 4096] CPU
+            token_acts = torch.cat([fwd_ref, bwd_ref], dim=-1)  # [B, 256, 8192] CPU
 
-            # Labels: [B, n_heads, 256] → transpose to [B, 256, n_heads]
-            labels = labels_chunk.acts.float().to(device, non_blocking=True)
-            labels = labels.permute(0, 2, 1)  # [B, 256, n_heads]
+            # Labels on CPU: [B, n_heads, 256] → [B, 256, n_heads]
+            labels = labels_chunk.acts.float().permute(0, 2, 1)  # CPU
 
-            # Flatten to per-token: [B*256, 1, 8192] acts, [B*256, n_heads] labels
+            # Flatten and move only what's needed to GPU
             n_tokens = B * 256
-            flat_acts = token_acts.reshape(n_tokens, 1, d_model)
-            flat_labels = labels.reshape(n_tokens, n_heads)
+            flat_acts = token_acts.reshape(n_tokens, 1, d_model).to(device, non_blocking=True)
+            flat_labels = labels.reshape(n_tokens, n_heads).to(device, non_blocking=True)
 
             # Forward + loss
             logits = probe(flat_acts)
