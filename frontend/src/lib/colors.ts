@@ -12,11 +12,11 @@ export function scoreColor(s: number): string {
 
 /** 5-tier classification color from a likelihood ratio (0 = benign, 1 = pathogenic). */
 export function barColor(lr: number): string {
-  if (lr > 0.9) return '#c55';
-  if (lr > 0.75) return '#d88';
-  if (lr < 0.1) return '#27a';
-  if (lr < 0.25) return '#6ac';
-  return '#bbb';
+  if (lr > 0.9) return '#cc5555';
+  if (lr > 0.75) return '#dd8888';
+  if (lr < 0.1) return '#2178ab';
+  if (lr < 0.25) return '#66aacc';
+  return '#bbbbbb';
 }
 
 /** 5-tier color for predictor bars (same scale, with optional inversion). */

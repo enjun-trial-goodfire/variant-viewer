@@ -1,6 +1,6 @@
 <script lang="ts">
   import EffectRow from '../EffectRow.svelte';
-  import Swatch from '../Swatch.svelte';
+  import PathogenicityLegend from '../PathogenicityLegend.svelte';
   import type { Variant, GlobalData } from '../../lib/types';
 
   interface Props { variant: Variant; global: GlobalData; }
@@ -17,10 +17,10 @@
       .map(([head, d]) => {
         const info = headsConfig[head];
         if (!info || info.quality === 'removed' || info.exclude_from_effect_expansion || info.predictor) return null;
-        return { key: head, value: d.value, lr: d.lr, display: info.display ?? head };
+        return { key: head, value: d.value, display: info.display ?? head };
       })
       .filter(Boolean)
-      .sort((a, b) => Math.abs(b!.value) - Math.abs(a!.value)) as Array<{key: string; value: number; lr: number; display: string}>;
+      .sort((a, b) => Math.abs(b!.value) - Math.abs(a!.value)) as Array<{key: string; value: number; display: string}>;
   });
 
   const visible = $derived(showAll ? items : items.slice(0, TOP_N));
@@ -34,9 +34,7 @@
         <button class="help-btn" onclick={() => showHelp = !showHelp}>?</button>
       </div>
       <div class="legend-cell">
-        <span class="ll">benign</span>
-        <Swatch color="#27a" label="Benign" /><Swatch color="#6ac" label="Leaning benign" /><Swatch color="#bbb" label="Neutral" /><Swatch color="#d88" label="Leaning pathogenic" /><Swatch color="#c55" label="Pathogenic" />
-        <span class="ll">pathogenic</span>
+        <PathogenicityLegend />
       </div>
       <div></div>
     </div>
@@ -48,7 +46,7 @@
     </div>
 
     {#each visible as item}
-      <EffectRow head={item.key} display={item.display} value={item.value} lr={item.lr} description={headsConfig[item.key]?.description} distributions={g.distributions} />
+      <EffectRow head={item.key} display={item.display} value={item.value} description={headsConfig[item.key]?.description} distributions={g.distributions} />
     {/each}
 
     {#if items.length > TOP_N}

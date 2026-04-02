@@ -18,7 +18,6 @@
   interface Marker {
     value: number;
     color: string;
-    dash?: number[];
     label?: string;
   }
 
@@ -50,7 +49,7 @@
       const idx = Math.max(0, Math.min(bins - 1, Math.floor((m.value - lo) / (hi - lo) * bins)));
       return {
         xAxis: idx,
-        lineStyle: { color: m.color, width: 2, type: m.dash ? 'dashed' : 'solid' },
+        lineStyle: { color: m.color, width: 1.5, type: 'solid' },
         label: { show: false },
       };
     });
@@ -119,7 +118,7 @@
     <div class="hist-legend">
       {#each markers as m}
         <span class="legend-item">
-          <span class="legend-line" style="border-color:{m.color};border-style:{m.dash ? 'dashed' : 'solid'}"></span>
+          <span class="legend-line" style="border-color:{m.color}"></span>
           <span class="legend-label">{m.label} = {m.value.toFixed(3)}</span>
         </span>
       {/each}

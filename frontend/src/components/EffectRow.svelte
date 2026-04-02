@@ -6,14 +6,23 @@
     head: string;
     display: string;
     value: number;
-    lr: number;
     description?: string;
     distributions?: Record<string, any>;
   }
-  let { head, display, value, lr, description, distributions }: Props = $props();
+  let { head, display, value, description, distributions }: Props = $props();
 
   let expanded = $state(false);
   const histData = $derived(distributions?.[head]?.benign ? distributions[head] : null);
+
+  // Compute LR from the 1D distribution: what fraction is pathogenic at this score?
+  const lr = $derived.by(() => {
+    const d = histData;
+    if (!d?.benign || !d?.pathogenic || !d?.bins) return 0.5;
+    const idx = Math.min(d.bins - 1, Math.max(0, Math.floor(value * d.bins)));
+    const b = (d.benign[idx] || 0) * (d._bTotal || 1);
+    const p = (d.pathogenic[idx] || 0) * (d._pTotal || 1);
+    return (b + p) > 0 ? p / (b + p) : 0.5;
+  });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

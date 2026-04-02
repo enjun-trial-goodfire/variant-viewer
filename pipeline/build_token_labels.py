@@ -1,28 +1,33 @@
-"""Build binary token-level labels aligned to the variant activation dataset.
+"""Build per-head token-level labels as a single safetensors file.
 
 For each variant's 512 positions (256 downstream + 256 upstream), looks up
-binary genomic annotations via vectorized searchsorted. Stores as uint8
-{0=negative, 1=positive, 255=missing}.
+genomic annotations via vectorized searchsorted. Pure polars + torch, no numpy.
 
-Only binary disruption heads. Continuous and categorical heads are excluded.
+Output:
+  token_labels.safetensors  — one key per head, each [N_variants, 512]
+                              binary heads: uint8 {0, 1, 255=missing}
+                              continuous heads: float16 {value, NaN=missing}
+  token_labels.json         — ordered variant IDs + head metadata
 
 Usage:
-    uv run python pipeline/build_token_labels.py
+    uv run python pipeline/build_token_labels.py [ACTIVATIONS_DIR]
 """
 
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 import torch
-from goodfire_core.storage import ActivationDataset, FilesystemStorage
+from goodfire_core.storage import FilesystemStorage
+from safetensors.torch import save_file
 from tqdm import tqdm
 
 from loaders import load_heads
 from paths import DECONFOUNDED
+from training import local_activation_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -31,157 +36,242 @@ NORMALIZED_DIR = Path(
     "/mendelian_saes/bidirectional_saes_v1/sae_datasets/token_annotations_normalized"
 )
 
-MISSING: np.uint8 = np.uint8(255)
+MISSING = 255
 
 
-def load_positions(storage: FilesystemStorage) -> dict[str, torch.Tensor]:
-    """Load all positions: sequence_id → [2, 256] int64."""
-    pos_ds = ActivationDataset(storage, "positions", batch_size=512, include_provenance=True)
-    pos_dict: dict[str, torch.Tensor] = {}
-    for chunk_id in tqdm(range(pos_ds.num_chunks), desc="Loading positions"):
-        chunk = pos_ds.load_chunk(chunk_id)
-        for i, sid in enumerate(chunk.sequence_ids):
-            pos_dict[sid] = chunk.acts[i]
-    logger.info(f"Positions: {len(pos_dict):,} variants")
-    return pos_dict
+def _timed(msg: str, t0: float) -> float:
+    now = time.time()
+    logger.info(f"[{now - t0:.1f}s] {msg}")
+    return now
 
 
-def build_label_index(
-    pos_dict: dict[str, torch.Tensor],
+# ── Position loading ─────────────────────────────────────────────────
+
+
+def load_positions(storage: FilesystemStorage) -> tuple[list[str], torch.Tensor, torch.Tensor]:
+    """Load variant IDs (ordered) and positions as contiguous tensors."""
+    ds = local_activation_dataset(storage, "positions", batch_size=512, include_provenance=True)
+    ordered_ids: list[str] = []
+    fwd_chunks: list[torch.Tensor] = []
+    bwd_chunks: list[torch.Tensor] = []
+    for chunk_id in tqdm(range(ds.num_chunks), desc="Loading positions"):
+        chunk = ds.load_chunk(chunk_id)
+        ordered_ids.extend(chunk.sequence_ids)
+        fwd_chunks.append(chunk.acts[:, 0])
+        bwd_chunks.append(chunk.acts[:, 1])
+    return (
+        ordered_ids,
+        torch.cat(fwd_chunks, dim=0).long(),
+        torch.cat(bwd_chunks, dim=0).long(),
+    )
+
+
+# ── Per-chromosome annotation loading ────────────────────────────────
+
+
+def load_chromosome_annotations(
+    path: Path,
+    head_names: tuple[str, ...],
+    needed_positions: torch.Tensor,
+    kind: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load + filter annotations for one chromosome.
+
+    Args:
+        needed_positions: 1D int64 tensor of unique positions to load.
+    Returns:
+        (sorted_positions [M], label_matrix [M, n_heads])
+    """
+    available = set(pl.read_parquet_schema(path).keys())
+    load_cols = ["position"] + [h for h in head_names if h in available]
+
+    # Semi-join is faster than is_in for large position sets
+    needed_df = pl.DataFrame({"position": needed_positions}).lazy()
+    df = (
+        pl.scan_parquet(path, cache=False)
+        .select(load_cols)
+        .join(needed_df, on="position", how="semi")
+        .sort("position")
+        .collect()
+    )
+
+    # Add missing columns in one batch (no per-column loop)
+    missing = [h for h in head_names if h not in df.columns]
+    if missing:
+        fill = -1 if kind == "binary" else None
+        dtype = pl.Int16 if kind == "binary" else pl.Float32
+        df = df.with_columns([pl.lit(fill).cast(dtype).alias(h) for h in missing])
+
+    sorted_positions = df["position"].to_torch().long()
+
+    if kind == "binary":
+        head_df = df.select([pl.col(h).fill_null(-1).cast(pl.Int16) for h in head_names])
+        raw = head_df.to_torch(dtype=pl.Int16)  # [M, n_heads]
+        label_mat = torch.full_like(raw, MISSING, dtype=torch.uint8)
+        valid = (raw == 0) | (raw == 1)
+        label_mat[valid] = raw[valid].to(torch.uint8)
+    else:
+        head_df = df.select([pl.col(h).fill_null(float("nan")).cast(pl.Float32) for h in head_names])
+        label_mat = head_df.to_torch(dtype=pl.Float32)  # [M, n_heads]
+
+    return sorted_positions, label_mat
+
+
+# ── Vectorized position lookup ───────────────────────────────────────
+
+
+def resolve_positions(
+    query: torch.Tensor,
+    sorted_positions: torch.Tensor,
+    label_mat: torch.Tensor,
+    n_heads: int,
+    kind: str,
+) -> torch.Tensor:
+    """query [M] → labels [M, n_heads] via searchsorted."""
+    dtype = torch.uint8 if kind == "binary" else torch.float32
+    fill = MISSING if kind == "binary" else float("nan")
+    result = torch.full((len(query), n_heads), fill, dtype=dtype)
+
+    if len(sorted_positions) == 0:
+        return result
+
+    indices = torch.searchsorted(sorted_positions, query).clamp(0, len(sorted_positions) - 1)
+    matches = sorted_positions[indices] == query
+    if matches.any():
+        result[matches] = label_mat[indices[matches]]
+
+    return result
+
+
+# ── Main build ───────────────────────────────────────────────────────
+
+
+def build_labels(
+    ordered_ids: list[str],
+    fwd_positions: torch.Tensor,
+    bwd_positions: torch.Tensor,
     head_names: tuple[str, ...],
     normalized_dir: Path,
-) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Build per-chromosome (sorted_positions, label_matrix) for vectorized lookup.
+    kind: str,
+) -> torch.Tensor:
+    """Build [N, 512, n_heads] label tensor. Vectorized per-chromosome."""
+    n_variants = len(ordered_ids)
+    n_heads = len(head_names)
+    dtype = torch.uint8 if kind == "binary" else torch.float32
+    fill = MISSING if kind == "binary" else float("nan")
 
-    Returns {chrom: (sorted_positions[N], labels[N, n_heads] uint8)}.
-    Only positions needed by our variants are loaded (predicate pushdown).
-    """
-    needed: dict[str, set[int]] = {}
-    for sid, positions in pos_dict.items():
-        chrom = sid.split(":")[0]
-        s = needed.setdefault(chrom, set())
-        s.update(positions[0].tolist())
-        s.update(positions[1].tolist())
+    labels = torch.full((n_variants, 512, n_heads), fill, dtype=dtype)
 
-    total_needed = sum(len(v) for v in needed.values())
-    logger.info(f"Need {total_needed:,} unique positions across {len(needed)} chromosomes")
+    # Group variant indices by chromosome
+    chrom_to_indices: dict[str, list[int]] = {}
+    for i, sid in enumerate(ordered_ids):
+        chrom_to_indices.setdefault(sid.split(":")[0], []).append(i)
 
-    result: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-
-    for chrom in tqdm(sorted(needed.keys()), desc="Loading annotations"):
+    for chrom in tqdm(sorted(chrom_to_indices.keys()), desc=f"Building ({kind})"):
         path = normalized_dir / f"{chrom}.parquet"
         if not path.exists():
+            logger.warning(f"No annotation file for {chrom}")
             continue
 
-        positions_set = needed[chrom]
-        available = set(pl.read_parquet_schema(path).keys())
-        load_cols = ["position"] + [h for h in head_names if h in available]
+        idx_t = torch.tensor(chrom_to_indices[chrom], dtype=torch.long)
 
-        df = (
-            pl.scan_parquet(path, cache=False)
-            .select(load_cols)
-            .filter(pl.col("position").is_in(list(positions_set)))
-            .sort("position")
-            .collect()
-        )
+        # Unique positions needed for this chromosome (torch-level, no Python set)
+        all_pos = torch.cat([fwd_positions[idx_t].reshape(-1), bwd_positions[idx_t].reshape(-1)])
+        unique_pos = all_pos.unique()
 
-        n_rows = df.height
-        n_heads = len(head_names)
-        label_mat = np.full((n_rows, n_heads), MISSING, dtype=np.uint8)
+        sorted_pos, label_mat = load_chromosome_annotations(path, head_names, unique_pos, kind)
 
-        for h_idx, h in enumerate(head_names):
-            if h not in df.columns:
-                continue
-            arr = df[h].fill_null(-1).to_numpy()
-            valid = (arr == 0) | (arr == 1)
-            out = np.full(len(arr), MISSING, dtype=np.uint8)
-            out[valid] = arr[valid].astype(np.uint8)
-            label_mat[:, h_idx] = out
+        # Forward: flatten → lookup → unflatten
+        fwd_labels = resolve_positions(fwd_positions[idx_t].reshape(-1), sorted_pos, label_mat, n_heads, kind)
+        labels[idx_t, :256] = fwd_labels.reshape(len(idx_t), 256, n_heads)
 
-        sorted_positions = df["position"].to_numpy().astype(np.int64)
-        result[chrom] = (sorted_positions, label_mat)
+        # Backward
+        bwd_labels = resolve_positions(bwd_positions[idx_t].reshape(-1), sorted_pos, label_mat, n_heads, kind)
+        labels[idx_t, 256:] = bwd_labels.reshape(len(idx_t), 256, n_heads)
 
-        n_valid = np.sum(label_mat != MISSING)
-        logger.info(f"  {chrom}: {n_rows:,} positions, {n_valid / label_mat.size:.1%} coverage")
-
-    mem_gb = sum(arr.nbytes + mat.nbytes for arr, mat in result.values()) / 1e9
-    logger.info(f"Label index: {mem_gb:.1f} GB")
-    return result
-
-
-def resolve_labels(
-    positions: np.ndarray,
-    chrom_entry: tuple[np.ndarray, np.ndarray],
-    n_heads: int,
-) -> np.ndarray:
-    """Resolve labels for a 1D array of genomic positions → [n_heads, len(positions)] uint8."""
-    result = np.full((n_heads, len(positions)), MISSING, dtype=np.uint8)
-    sorted_positions, label_mat = chrom_entry
-
-    indices = np.searchsorted(sorted_positions, positions)
-    indices = np.clip(indices, 0, len(sorted_positions) - 1)
-    matches = sorted_positions[indices] == positions
-
-    matched_indices = indices[matches]
-    if matched_indices.size > 0:
-        result[:, matches] = label_mat[matched_indices].T
-
-    return result
+    return labels
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    t0 = time.time()
 
     activations = Path(sys.argv[1]) if len(sys.argv) > 1 else DECONFOUNDED
-    output_name = sys.argv[2] if len(sys.argv) > 2 else "token_labels_binary"
-
     heads = load_heads()
-    head_names = tuple(
-        name for name, info in heads.items()
-        if info["category"] != "effect" and info["kind"] == "binary"
-    )
-    n_heads = len(head_names)
-    logger.info(f"Binary disruption heads: {n_heads}")
-
     storage = FilesystemStorage(activations)
-    pos_dict = load_positions(storage)
-    chrom_data = build_label_index(pos_dict, head_names, NORMALIZED_DIR)
 
-    # Import build_aligned_dataset from annotator
-    annotator_scripts = Path(__file__).resolve().parent.parent.parent / "annotator" / "scripts"
-    sys.path.insert(0, str(annotator_scripts))
-    from build_aligned_dataset import build_aligned_dataset
+    ordered_ids, fwd_positions, bwd_positions = load_positions(storage)
+    _timed(f"Positions: {len(ordered_ids):,} variants", t0)
 
-    def transform(sequence_id: str, ref_item: torch.Tensor) -> torch.Tensor:
-        positions = pos_dict.get(sequence_id)
-        if positions is None:
-            return torch.full((n_heads, 512), MISSING, dtype=torch.uint8)
-
-        chrom = sequence_id.split(":")[0]
-        entry = chrom_data.get(chrom)
-        if entry is None:
-            return torch.full((n_heads, 512), MISSING, dtype=torch.uint8)
-
-        fwd_pos = positions[0].numpy().astype(np.int64)
-        bwd_pos = positions[1].numpy().astype(np.int64)
-
-        fwd_labels = resolve_labels(fwd_pos, entry, n_heads)
-        bwd_labels = resolve_labels(bwd_pos, entry, n_heads)
-
-        return torch.from_numpy(np.concatenate([fwd_labels, bwd_labels], axis=1))
-
-    out_dir = build_aligned_dataset(
-        storage=storage,
-        reference="activations",
-        output=output_name,
-        transform=transform,
-        item_shape=(n_heads, 512),
-        dtype="uint8",
-        overwrite=True,
+    binary_names = tuple(
+        name for name, info in heads.items() if info["category"] != "effect" and info["kind"] == "binary"
     )
+    continuous_names = tuple(
+        name for name, info in heads.items() if info["category"] != "effect" and info["kind"] == "continuous"
+    )
+    logger.info(f"Heads: {len(binary_names)} binary + {len(continuous_names)} continuous")
 
-    (out_dir / "head_names.json").write_text(json.dumps(list(head_names)))
-    logger.info(f"Done: {n_heads} heads × 512 positions, saved to {out_dir}")
+    binary_labels = build_labels(ordered_ids, fwd_positions, bwd_positions, binary_names, NORMALIZED_DIR, "binary")
+    _timed(f"Binary: {binary_labels.shape}", t0)
+
+    continuous_labels = None
+    if continuous_names:
+        continuous_labels = build_labels(
+            ordered_ids, fwd_positions, bwd_positions, continuous_names, NORMALIZED_DIR, "continuous"
+        )
+        _timed(f"Continuous: {continuous_labels.shape}", t0)
+
+    # ── Validate and filter: drop heads with degenerate data ────────
+    kept_binary: list[str] = []
+    kept_continuous: list[str] = []
+    dropped: list[str] = []
+    all_tensors: dict[str, torch.Tensor] = {}
+
+    for h_idx, name in enumerate(binary_names):
+        t = binary_labels[:, :, h_idx].contiguous()
+        valid = t != MISSING
+        coverage = valid.sum().item() / t.numel()
+        if coverage == 0:
+            dropped.append(f"{name} (binary: no valid data at all)")
+            continue
+        all_tensors[name] = t
+        kept_binary.append(name)
+
+    if continuous_labels is not None:
+        for h_idx, name in enumerate(continuous_names):
+            t = continuous_labels[:, :, h_idx]
+            valid = ~torch.isnan(t)
+            coverage = valid.sum().item() / t.numel()
+            std = t[valid].std().item() if valid.any() else 0.0
+            if coverage < 0.01 or std < 1e-6:
+                dropped.append(f"{name} (continuous: coverage={coverage:.1%}, std={std:.4f})")
+                continue
+            all_tensors[name] = t.to(torch.float16).contiguous()
+            kept_continuous.append(name)
+
+    if dropped:
+        logger.warning(f"Dropped {len(dropped)} degenerate heads:")
+        for d in dropped:
+            logger.warning(f"  {d}")
+
+    logger.info(f"Kept: {len(kept_binary)} binary + {len(kept_continuous)} continuous = {len(all_tensors)}")
+    _timed("Validated and sliced", t0)
+
+    # ── Save ─────────────────────────────────────────────────────────
+    assert len(all_tensors) > 0, "No heads passed validation"
+
+    out_path = activations / "token_labels.safetensors"
+    save_file(all_tensors, str(out_path))
+
+    meta = {
+        "ids": ordered_ids,
+        "binary_heads": kept_binary,
+        "continuous_heads": kept_continuous,
+    }
+    (activations / "token_labels.json").write_text(json.dumps(meta))
+
+    total_gb = sum(t.nbytes for t in all_tensors.values()) / 1e9
+    _timed(f"Done: {out_path} ({total_gb:.1f} GB, {len(all_tensors)} heads)", t0)
 
 
 if __name__ == "__main__":

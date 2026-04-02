@@ -24,46 +24,52 @@ Parallel (SLURM array):
 """
 
 import json
-import shutil
-import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import polars as pl
 import torch
 import typer
-from goodfire_core.storage import ActivationDataset, ActivationWriter, FilesystemStorage
+from goodfire_core.storage import ActivationWriter, FilesystemStorage
 from loguru import logger
 from tqdm import tqdm
 
 from probe.covariance import MultiHeadCovProbeV2
+from training import local_activation_dataset
 
 # ── Activation view transforms (inlined from streaming.py) ────────────
 # Layout: [B, direction=2, view=3, K, d]. direction: 0=fwd, 1=bwd. view: 0=var, 1=ref, 2=ref_cross
+
 
 def unified_diff(x: torch.Tensor) -> torch.Tensor:
     diff = x[:, :, 0] - x[:, :, 1]
     return torch.cat([diff[:, 0], diff[:, 1]], dim=-1)
 
+
 def unified_ref(x: torch.Tensor) -> torch.Tensor:
     ref = x[:, :, 1]
     return torch.cat([ref[:, 0], ref[:, 1]], dim=-1)
+
 
 def unified_var(x: torch.Tensor) -> torch.Tensor:
     var = x[:, :, 0]
     return torch.cat([var[:, 0], var[:, 1]], dim=-1)
 
+
 def iter_dataset(
-    storage: FilesystemStorage, dataset_name: str, target_ids: set[str],
+    storage: FilesystemStorage,
+    dataset_name: str,
+    target_ids: set[str],
     transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
-    *, batch_size: int = 512, dtype: torch.dtype = torch.bfloat16, device: str = "cuda",
+    *,
+    batch_size: int = 512,
+    dtype: torch.dtype = torch.bfloat16,
+    device: str = "cuda",
 ) -> Iterator[tuple[torch.Tensor, list[str]]]:
-    ds = ActivationDataset(storage, dataset_name, batch_size=batch_size, include_provenance=True)
-    if ds._index_path:  # copy SQLite index to /tmp to avoid NFS locking
-        local = Path(tempfile.mkdtemp(prefix="gf_idx_")) / "index.sqlite"
-        shutil.copy2(ds._index_path, local)
-        ds._index_path = str(local)
-    for batch in ds.training_iterator(device=device, n_epochs=1, shuffle=False, drop_last=False, sequence_ids=list(target_ids)):
+    ds = local_activation_dataset(storage, dataset_name, batch_size=batch_size, include_provenance=True)
+    for batch in ds.training_iterator(
+        device=device, n_epochs=1, shuffle=False, drop_last=False, sequence_ids=list(target_ids)
+    ):
         x = batch.acts.to(dtype=dtype)
         if transform is not None:
             x = transform(x)
@@ -90,9 +96,7 @@ def _scores_from_logits(
             centers = (torch.arange(probs.size(-1), dtype=probs.dtype) + 0.5) / probs.size(-1)
             result.setdefault(f"{prefix}score_{name}", []).extend((probs * centers).sum(-1).tolist())
         elif logits.size(-1) == 2:
-            result.setdefault(f"{prefix}score_{name}", []).extend(
-                torch.softmax(logits, dim=-1)[:, 1].cpu().tolist()
-            )
+            result.setdefault(f"{prefix}score_{name}", []).extend(torch.softmax(logits, dim=-1)[:, 1].cpu().tolist())
         else:
             indices = logits.argmax(-1).cpu().tolist()
             labels = class_labels.get(name) if class_labels else None
@@ -136,11 +140,7 @@ def main(
 
     # ── Resolve IDs + shard ───────────────────────────────────────────────
     storage = FilesystemStorage(activations)
-    ds_ids = ActivationDataset(storage, "activations", batch_size=1, include_provenance=True)
-    if ds_ids._index_path:  # copy SQLite index to /tmp to avoid NFS locking
-        local = Path(tempfile.mkdtemp(prefix="gf_idx_")) / "index.sqlite"
-        shutil.copy2(ds_ids._index_path, local)
-        ds_ids._index_path = str(local)
+    ds_ids = local_activation_dataset(storage, "activations", batch_size=1, include_provenance=True)
     all_ids = ds_ids.list_sequence_ids()
 
     n = len(all_ids)
@@ -169,7 +169,8 @@ def main(
     output_storage = FilesystemStorage(output_dir)
     partition_id = shard_id if n_shards > 1 else None
     writer = ActivationWriter(
-        output_storage, "embeddings",
+        output_storage,
+        "embeddings",
         d_model=3 * d_hidden * d_hidden,
         mode="tensor",
         dtype="bfloat16",
@@ -186,8 +187,9 @@ def main(
 
     with torch.no_grad():
         for raw, ids in tqdm(
-            iter_dataset(storage, "activations", target_ids, None,
-                         batch_size=batch_size, dtype=torch.bfloat16, device="cuda"),
+            iter_dataset(
+                storage, "activations", target_ids, None, batch_size=batch_size, dtype=torch.bfloat16, device="cuda"
+            ),
             desc=f"extract s{shard_id}",
         ):
             # Three views from the same raw batch
@@ -196,11 +198,14 @@ def main(
             var_acts = unified_var(raw).float()
 
             # Embeddings: stack all 3 views → [B, 3, d_h, d_h]
-            emb = torch.stack([
-                model.embedding(diff_acts),
-                model.embedding(ref_acts),
-                model.embedding(var_acts),
-            ], dim=1)
+            emb = torch.stack(
+                [
+                    model.embedding(diff_acts),
+                    model.embedding(ref_acts),
+                    model.embedding(var_acts),
+                ],
+                dim=1,
+            )
             writer.add(acts=emb.flatten(1).cpu().to(torch.bfloat16), sequence_ids=ids)
 
             # Scores: 3 forward passes, split by head type
@@ -210,20 +215,25 @@ def main(
 
             # Effect heads → score_* from diff view
             for k, v in _scores_from_logits(
-                {h: diff_logits[h] for h in effect_heads}, model,
+                {h: diff_logits[h] for h in effect_heads},
+                model,
                 class_labels=class_labels,
             ).items():
                 effect_scores.setdefault(k, []).extend(v)
 
             # Disruption heads → ref_score_* from ref view, var_score_* from var view
             for k, v in _scores_from_logits(
-                {h: ref_logits[h] for h in disruption_heads}, model, "ref_",
+                {h: ref_logits[h] for h in disruption_heads},
+                model,
+                "ref_",
                 class_labels=class_labels,
             ).items():
                 ref_scores.setdefault(k, []).extend(v)
 
             for k, v in _scores_from_logits(
-                {h: var_logits[h] for h in disruption_heads}, model, "var_",
+                {h: var_logits[h] for h in disruption_heads},
+                model,
+                "var_",
                 class_labels=class_labels,
             ).items():
                 var_scores.setdefault(k, []).extend(v)

@@ -3,16 +3,87 @@
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 
 import polars as pl
 import torch
 import torch.distributed as dist
+from goodfire_core.storage import ActivationDataset, FilesystemStorage
+from goodfire_core.training.callbacks import CheckpointCallback
+from loguru import logger
 
 from loaders import load_heads
 from probe.covariance import HeadSpec
+
+
+# ── NFS workaround ─────────────────────────────────────────────────────
+
+
+def local_activation_dataset(storage: FilesystemStorage, name: str, **kwargs) -> ActivationDataset:
+    """Create an ActivationDataset with SQLite index copied to local /tmp.
+
+    SQLite WAL-mode locking deadlocks on NFS when multiple parallel jobs
+    (SLURM array shards or DDP ranks) access the same index file. Copying
+    to /tmp gives each process its own read-only copy.
+    """
+    ds = ActivationDataset(storage, name, **kwargs)
+    # Attribute name varies across goodfire-core versions
+    attr = "_index_sqlite_path" if hasattr(ds, "_index_sqlite_path") else "_index_path"
+    index_path = getattr(ds, attr, None)
+    if index_path:
+        local = Path(tempfile.mkdtemp(prefix="gf_idx_")) / "index.sqlite"
+        shutil.copy2(index_path, local)
+        setattr(ds, attr, str(local))
+    return ds
+
+
+# ── Training callbacks (goodfire-core integration) ──────────────────────
+
+
+def setup_training_callbacks(
+    project: str,
+    name: str,
+    config: dict,
+    checkpoint_dir: str,
+    rank: int = 0,
+) -> list:
+    """Create goodfire-core WandBCallback + CheckpointCallback for rank 0.
+
+    Returns an empty list for non-zero ranks (no logging/checkpointing).
+    WandB failure is non-fatal — training continues without experiment tracking.
+    """
+    if rank != 0:
+        return []
+
+    callbacks: list = [
+        CheckpointCallback(
+            checkpoint_dir=checkpoint_dir,
+            save_every_epochs=1,
+            save_best=False,
+        ),
+    ]
+
+    try:
+        from goodfire_core.training.callbacks import WandBCallback, WandBConfig
+
+        callbacks.append(WandBCallback(WandBConfig(project=project, name=name), config_dict=config))
+    except Exception as exc:
+        logger.warning(f"WandB callback init failed (training continues): {exc}")
+
+    return callbacks
+
+
+def fire_callbacks(callbacks: list, method: str, **kwargs) -> None:
+    """Call a callback method on all callbacks."""
+    for cb in callbacks:
+        fn = getattr(cb, method, None)
+        if fn is not None:
+            fn(**kwargs)
 
 
 # ── Head loading ─────────────────────────────────────────────────────────
@@ -20,13 +91,15 @@ from probe.covariance import HeadSpec
 # Columns that are positional metadata, not prediction targets.
 # These get auto-discovered by discover_heads() as categorical heads
 # but are indices/counts, not biological properties worth predicting.
-_METADATA_HEADS = frozenset({
-    "residue_number",           # amino acid index in protein (up to 35990)
-    "exon_number",              # exon index in transcript (up to 364)
-    "n_transcripts_with_exon",  # transcript count (up to 350)
-    "ppi_partner_count",        # interaction partner count (up to 502)
-    "fstack_state",             # chromatin state enum (101 states)
-})
+_METADATA_HEADS = frozenset(
+    {
+        "residue_number",  # amino acid index in protein (up to 35990)
+        "exon_number",  # exon index in transcript (up to 364)
+        "n_transcripts_with_exon",  # transcript count (up to 350)
+        "ppi_partner_count",  # interaction partner count (up to 502)
+        "fstack_state",  # chromatin state enum (101 states)
+    }
+)
 
 
 def load_head_specs() -> tuple[dict[str, HeadSpec], dict[str, HeadSpec]]:

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tierColor } from '../../lib/colors';
-  import Swatch from '../Swatch.svelte';
+  import ScoreRow from '../ScoreRow.svelte';
+  import PathogenicityLegend from '../PathogenicityLegend.svelte';
   import HeadHistogram from '../HeadHistogram.svelte';
   import type { Variant, GlobalData } from '../../lib/types';
 
@@ -17,10 +18,10 @@
     rows.push({
       key: '_pathogenic',
       name: 'Evo2 Pathogenicity',
-      rawVal: v.score_pathogenic,
-      displayVal: v.score_pathogenic,
-      color: tierColor(v.score_pathogenic, false),
-      damaging: v.score_pathogenic > 0.5,
+      rawVal: v.pathogenicity,
+      displayVal: v.pathogenicity,
+      color: tierColor(v.pathogenicity, false),
+      damaging: v.pathogenicity > 0.5,
       isProbe: false,
       isEvo2: true,
     });
@@ -87,9 +88,7 @@
         <button class="help-btn" onclick={() => showHelp = !showHelp}>?</button>
       </div>
       <div class="legend-cell">
-        <span class="ll">benign</span>
-        <Swatch color="#27a" label="Benign" /><Swatch color="#6ac" label="Leaning benign" /><Swatch color="#bbb" label="Neutral" /><Swatch color="#d88" label="Leaning pathogenic" /><Swatch color="#c55" label="Pathogenic" />
-        <span class="ll">pathogenic</span>
+        <PathogenicityLegend />
       </div>
       <div></div>
     </div>
@@ -103,18 +102,12 @@
     {#each predRows as r}
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div onclick={() => toggle(r.key, headsConfig[r.key]?.predictor?.invert ?? false)} style="cursor:pointer">
-        <div class="profile-row">
-          <div class="profile-label">
-            {r.name}
-            {#if r.isEvo2}<span style="font-size:9px;color:var(--accent);margin-left:3px">ours</span>{/if}
-          </div>
-          <div class="profile-bar-container">
-            <div class="profile-bar" style="width:{Math.max(2, r.displayVal * 100)}%;background:{r.color}"></div>
-          </div>
-          <div class="profile-value" style="color:{r.color};font-weight:600">
-            {(r.displayVal * 100).toFixed(0)}%{#if r.isProbe}<sup style="font-size:8px;color:var(--text-muted)">*</sup>{/if}
-          </div>
-        </div>
+        <ScoreRow
+          label="{r.name}{r.isEvo2 ? ' ✦' : ''}"
+          value={r.displayVal}
+          color={r.color}
+          suffix={r.isProbe ? '<sup style="font-size:8px;color:var(--text-muted)">*</sup>' : ''}
+        />
       </div>
 
       {#if expandedKey === r.key}

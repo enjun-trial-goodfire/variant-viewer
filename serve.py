@@ -28,43 +28,44 @@ from prompts import SYSTEM_PROMPT, build_prompt
 
 
 def _flat_to_prompt_dict(flat: dict, heads_config: dict) -> dict:
-    """Minimal adapter: flat DB row → dict that build_prompt() expects.
+    """Adapter for the Claude interpret endpoint ONLY.
 
-    build_prompt needs: id, gene, score, consequence, substitution, hgvsc, hgvsp,
-    disruption {head: [ref, var]}, effect {head: float}, neighbors [...].
+    build_prompt() expects nested disruption/effect dicts. This reconstructs them
+    from flat DB columns. This is NOT part of the data pipeline — the variant API
+    endpoint sends flat data unchanged. Only the interpret endpoint uses this.
     """
     heads = heads_config.get("heads", {})
     disruption = {}
     effect = {}
     for h, info in heads.items():
         if info.get("category") == "disruption":
-            ref = flat.get(f"ref_score_{h}")
-            var = flat.get(f"var_score_{h}")
+            ref = flat.get(f"ref_{h}")
+            var = flat.get(f"var_{h}")
             if ref is not None:
                 disruption[h] = [ref, var if var is not None else ref]
         else:
-            val = flat.get(f"score_{h}")
+            val = flat.get(f"eff_{h}")
             if val is not None:
                 effect[h] = val
 
     return {
-        "id": flat.get("variant_id", ""),
-        "gene": flat.get("gene_name", ""),
-        "score": flat.get("score_pathogenic", 0),
-        "consequence": flat.get("consequence", ""),
-        "substitution": flat.get("substitution", ""),
-        "hgvsc": flat.get("hgvsc", ""),
-        "hgvsp": flat.get("hgvsp", ""),
-        "impact": flat.get("vep_impact", ""),
-        "exon": flat.get("exon", ""),
-        "label": flat.get("label", ""),
+        "id": flat["variant_id"],
+        "gene": flat["gene_name"],
+        "score": flat["pathogenicity"],
+        "consequence": flat["consequence"],
+        "substitution": flat.get("substitution"),
+        "hgvsc": flat.get("hgvsc"),
+        "hgvsp": flat.get("hgvsp"),
+        "impact": flat.get("vep_impact"),
+        "exon": flat.get("exon"),
+        "label": flat["label"],
         "loeuf": flat.get("loeuf"),
         "gnomad": flat.get("gnomad"),
-        "domains": json.loads(flat["domains"]) if isinstance(flat.get("domains"), str) else flat.get("domains", []),
+        "domains": json.loads(flat["domains"]) if isinstance(flat.get("domains"), str) else [],
         "disruption": disruption,
         "effect": effect,
         "gt": {k[3:]: v for k, v in flat.items() if k.startswith("gt_") and isinstance(v, (int, float))},
-        "neighbors": json.loads(flat["neighbors"]) if isinstance(flat.get("neighbors"), str) else flat.get("neighbors", []),
+        "neighbors": json.loads(flat["neighbors"]) if isinstance(flat.get("neighbors"), str) else [],
     }
 
 # Load .env if present (for ANTHROPIC_API_KEY)
@@ -104,14 +105,14 @@ async def umap_endpoint(request):
 
 
 async def variant_endpoint(request):
-    """GET /api/variants/{id} — flat row as-is."""
+    """GET /api/variants/{id} — flat row, no processing."""
     vid = request.path_params["variant_id"]
     cur = request.app.state.db.cursor()
     row = cur.execute("SELECT * FROM variants WHERE variant_id = ?", [vid]).fetchone()
     if not row:
         return JSONResponse({"error": "Not found"}, status_code=404)
     columns = [desc[0] for desc in cur.description]
-    return JSONResponse({col: val for col, val in zip(columns, row) if val is not None})
+    return JSONResponse(dict(zip(columns, row)))
 
 
 async def search_endpoint(request):
@@ -122,16 +123,16 @@ async def search_endpoint(request):
 
     cur = request.app.state.db.cursor()
     results = cur.execute(
-        "SELECT variant_id, label_display, score_pathogenic, consequence_display FROM variants "
-        "WHERE upper(gene_name) = ? ORDER BY score_pathogenic DESC LIMIT 30",
+        "SELECT variant_id, label_display, pathogenicity, consequence_display FROM variants "
+        "WHERE upper(gene_name) = ? ORDER BY pathogenicity DESC LIMIT 30",
         [q],
     ).fetchall()
 
     if len(results) < 30:
         more = cur.execute(
-            "SELECT variant_id, label_display, score_pathogenic, consequence_display FROM variants "
+            "SELECT variant_id, label_display, pathogenicity, consequence_display FROM variants "
             "WHERE upper(gene_name) LIKE ? AND upper(gene_name) != ? "
-            "ORDER BY score_pathogenic DESC LIMIT ?",
+            "ORDER BY pathogenicity DESC LIMIT ?",
             [f"{q}%", q, 30 - len(results)],
         ).fetchall()
         results.extend(more)
@@ -263,7 +264,7 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
         Route("/api/global", global_endpoint),
         Route("/api/umap", umap_endpoint),
         Route("/api/variants/search", search_endpoint),
-        Route("/api/interpret/{variant_id:path}", interpret_endpoint),
+        Route("/api/variants/{variant_id:path}/analysis", interpret_endpoint),
         Route("/api/variants/{variant_id:path}", variant_endpoint),
     ]
 

@@ -52,13 +52,14 @@ def check(probe: str = typer.Argument(PROBE_NAME, help="Probe name")):
 @app.command()
 def transform(
     probe: str = typer.Option(PROBE_NAME, help="Probe name (e.g. probe_v11)"),
+    token_probe: Optional[str] = typer.Option(None, help="Token probe (replaces disruption scores)"),
     output: Path = typer.Option(Path("builds/clean.parquet"), help="Output parquet path"),
     dev: Optional[int] = typer.Option(None, help="Dev mode: limit to N variants"),
 ):
     """Transform raw scores + metadata into clean parquet for the frontend."""
     from transform import main as _transform
 
-    _transform(probe=probe, output=output, dev=dev)
+    _transform(probe=probe, token_probe=token_probe, output=output, dev=dev)
     rprint(f"[green]Transformed:[/] {output}")
 
 

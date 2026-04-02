@@ -45,7 +45,7 @@ RENAMES = {
 META_COLS = frozenset({
     "variant_id", "gene_name", "chrom", "pos", "ref", "alt", "vcf_pos", "gene_strand",
     "consequence", "substitution", "label", "significance", "stars", "disease",
-    "score_pathogenic", "rs_id", "allele_id", "gene_id",
+    "pathogenicity", "rs_id", "allele_id", "gene_id",
     "hgvsc", "hgvsp", "vep_impact", "exon", "vep_transcript_id", "vep_protein_id",
     "domains", "loeuf", "gnomad",
     "gnomad_afr_af", "gnomad_amr_af", "gnomad_asj_af", "gnomad_eas_af",
@@ -83,10 +83,19 @@ LABEL_DISPLAY = {
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def filter_heads(df: pl.DataFrame, included: set[str]) -> pl.DataFrame:
-    keep = [c for c in df.columns
-            if not (c.startswith("ref_score_") and c[10:] not in included)
-            and not (c.startswith("var_score_") and c[10:] not in included)
-            and not (c.startswith("score_") and c != "score_pathogenic" and c[6:] not in included)]
+    """Drop head columns not in the included set."""
+    head_prefixes = ("ref_score_", "var_score_", "ref_", "var_", "dist_", "spread_", "eff_")
+    keep = []
+    for c in df.columns:
+        drop = False
+        for prefix in head_prefixes:
+            if c.startswith(prefix):
+                head = c[len(prefix):]
+                if head and head not in included:
+                    drop = True
+                break
+        if not drop:
+            keep.append(c)
     dropped = len(df.columns) - len(keep)
     if dropped:
         logger.info(f"  Filtered heads: dropped {dropped} columns, kept {len(included)} heads")
@@ -130,32 +139,18 @@ def prebin(values: torch.Tensor, n_bins: int, lo: float, hi: float) -> list[int]
     return torch.bincount(torch.clamp(mapped, 0, n_bins - 1), minlength=n_bins).tolist()
 
 
-def _hist(values: torch.Tensor, ben_mask: torch.Tensor, path_mask: torch.Tensor) -> dict:
+def _hist(values: torch.Tensor, ben_mask: torch.Tensor, path_mask: torch.Tensor,
+          lo: float = 0.0, hi: float = 1.0) -> dict:
     """Histogram with class-normalized fractions (each sums to 1.0)."""
-    ben_raw = prebin(values[ben_mask], BINS, 0.0, 1.0)
-    path_raw = prebin(values[path_mask], BINS, 0.0, 1.0)
+    ben_raw = prebin(values[ben_mask], BINS, lo, hi)
+    path_raw = prebin(values[path_mask], BINS, lo, hi)
     b_total = max(sum(ben_raw), 1)
     p_total = max(sum(path_raw), 1)
     ben = [round(c / b_total, 4) for c in ben_raw]
     path = [round(c / p_total, 4) for c in path_raw]
     return {"benign": ben, "pathogenic": path, "bins": BINS,
-            "range": [0.0, 1.0], "_bTotal": b_total, "_pTotal": p_total}
+            "range": [lo, hi], "_bTotal": b_total, "_pTotal": p_total}
 
-
-def likelihood_ratio(values: torch.Tensor, ben_mask: torch.Tensor, path_mask: torch.Tensor,
-                     n_bins: int = BINS) -> torch.Tensor:
-    """Vectorized likelihood ratio from raw values + masks. Returns tensor in [0, 1]."""
-    mapped = (values * n_bins).long().clamp(0, n_bins - 1)
-    ben_bins = mapped[ben_mask]
-    path_bins = mapped[path_mask]
-    b = torch.bincount(ben_bins, minlength=n_bins).float()
-    p = torch.bincount(path_bins, minlength=n_bins).float()
-    b_rate = b / b.sum().clamp(min=1)
-    p_rate = p / p.sum().clamp(min=1)
-    denom = p_rate + b_rate
-    lr_per_bin = torch.where(denom > 0, p_rate / denom, torch.tensor(0.5))
-    lr_per_bin = torch.where((b + p) >= 5, lr_per_bin, torch.tensor(0.5))
-    return lr_per_bin[mapped]
 
 
 # ── Heads config ──────────────────────────────────────────────────────
@@ -217,6 +212,7 @@ def build_heads_config(
 
 def main(
     probe: str = typer.Option(PROBE_NAME, help="Probe version"),
+    token_probe: str | None = typer.Option(None, help="Token probe version (replaces disruption scores)"),
     output: Path = typer.Option(Path("builds/clean.parquet"), help="Output parquet path"),
     dev: int | None = typer.Option(None, help="Dev mode: limit to N variants"),
 ) -> None:
@@ -234,6 +230,49 @@ def main(
         logger.info(f"  + {df_vus.height:,} VUS rows")
         df_scores = pl.concat([df_scores, df_vus], how="diagonal")
 
+    # ── Token probe: replace disruption scores with per-position data ──
+    if token_probe:
+        token_path = LABELED / token_probe / "token_scores.feather"
+        logger.info(f"Loading token scores ({token_probe})")
+        df_token = pl.read_ipc(str(token_path))
+        logger.info(f"  {df_token.height:,} rows, {df_token.width} columns")
+
+        # Token probe outputs ref_*, var_*, dist_*, spread_* (already canonical).
+        # Drop overlapping sequence probe disruption columns (ref_score_*, var_score_*).
+        token_heads = {c[4:] for c in df_token.columns if c.startswith("ref_")}
+        seq_drop = [c for c in df_scores.columns
+                    if (c.startswith("ref_score_") and c[10:] in token_heads)
+                    or (c.startswith("var_score_") and c[10:] in token_heads)]
+        if seq_drop:
+            df_scores = df_scores.drop(seq_drop)
+            logger.info(f"  Replaced {len(seq_drop)} sequence disruption columns with token scores")
+
+        # Drop delta_ columns (redundant — recomputed from ref/var)
+        df_token = df_token.drop([c for c in df_token.columns if c.startswith("delta_")])
+
+        # Inner join: only keep variants that have token scores.
+        # Variants without token data (48K VUS + ~186 edge cases) get no disruption columns.
+        n_before = df_scores.height
+        df_scores = df_scores.join(df_token, on="variant_id", how="inner")
+        n_dropped = n_before - df_scores.height
+        if n_dropped:
+            logger.info(f"  Dropped {n_dropped:,} variants without token scores")
+
+    # ── Rename to canonical convention BEFORE filtering ──────────────
+    cfg = json.loads((LABELED / probe / "config.json").read_text())
+    assert "effect_heads" in cfg, "config.json missing 'effect_heads' key"
+    effect_set = set(cfg["effect_heads"])
+
+    # Duplicate score_pathogenic → pathogenicity (metadata) before renaming score_ → eff_.
+    if "score_pathogenic" in df_scores.columns:
+        df_scores = df_scores.with_columns(pl.col("score_pathogenic").alias("pathogenicity"))
+
+    # score_{h} → eff_{h} for effect heads
+    early_renames = {c: f"eff_{c[6:]}" for c in df_scores.columns
+                     if c.startswith("score_") and c[6:] in effect_set}
+    if early_renames:
+        df_scores = df_scores.rename(early_renames)
+
     # ── Filter to quality-passing heads + always keep predictor heads ──
     quality = json.loads(QUALITY_PATH.read_text())
     vocab = json.loads(Path("heads.json").read_text())
@@ -250,8 +289,9 @@ def main(
 
     # ── gt_ prefix for annotation columns that clash with head names ──
     heads = load_heads()
-    gt_renames = {h: f"gt_{h}" for h in heads if h in df.columns and h not in META_COLS
-                  and not h.startswith("ref_score_") and not h.startswith("var_score_") and not h.startswith("score_")}
+    # Prefix annotation columns that share names with heads to avoid collisions.
+    # By this point, head columns already have prefixes (ref_, var_, eff_).
+    gt_renames = {h: f"gt_{h}" for h in heads if h in df.columns and h not in META_COLS}
     df = df.rename(gt_renames)
 
     # ── Rename to frontend field names ────────────────────────────────
@@ -266,34 +306,42 @@ def main(
         pl.col("pred_aa_swap").map_elements(_decode_aa_swap, return_dtype=pl.String).alias("substitution")
     ).drop("pred_aa_swap")
 
-    # ── Classify heads ────────────────────────────────────────────────
-    cfg = json.loads((LABELED / probe / "config.json").read_text())
+    # ── Classify heads ──────────────────────────────────────────────────
+    # Convention: ref_{h}, var_{h} = disruption; eff_{h} = effect; gt_{h} = ground truth
+    # Effects already renamed to eff_ before filtering. Rename remaining
+    # sequence probe disruption columns: ref_score_{h} → ref_{h}, var_score_{h} → var_{h}.
+    assert "disruption_heads" in cfg, "config.json missing 'disruption_heads' key"
     disruption_set = set(cfg["disruption_heads"])
-    effect_set = set(cfg["effect_heads"])
 
-    ref_cols = sorted(c for c in df.columns if c.startswith("ref_score_") and c[10:] in disruption_set)
-    var_cols = sorted(c for c in df.columns if c.startswith("var_score_") and c[10:] in disruption_set)
-    eff_cols = sorted(c for c in df.columns if c.startswith("score_") and c[6:] in effect_set)
-    disruption_heads = tuple(c[10:] for c in ref_cols)
-    effect_heads = tuple(c[6:] for c in eff_cols)
+    col_renames = {}
+    for c in df.columns:
+        if c.startswith("ref_score_"):
+            col_renames[c] = f"ref_{c[10:]}"
+        elif c.startswith("var_score_"):
+            col_renames[c] = f"var_{c[10:]}"
+    if col_renames:
+        df = df.rename(col_renames)
+
+    ref_cols = sorted(c for c in df.columns if c.startswith("ref_") and c[4:] in disruption_set)
+    var_cols = sorted(c for c in df.columns if c.startswith("var_") and c[4:] in disruption_set)
+    eff_cols = sorted(c for c in df.columns if c.startswith("eff_") and c[4:] in effect_set)
+    disruption_heads = tuple(c[4:] for c in ref_cols)
+    effect_heads = tuple(c[4:] for c in eff_cols)
     logger.info(f"  {len(disruption_heads)} disruption + {len(effect_heads)} effect heads")
 
     # ── Round scores, fill nulls ──────────────────────────────────────
     float_cols = [c for c in df.columns
-                  if (c.startswith("ref_score_") or c.startswith("var_score_") or
-                      c.startswith("score_") or c.startswith("gt_"))
-                  and c != "score_pathogenic"
+                  if (c.startswith("ref_") or c.startswith("var_") or
+                      c.startswith("eff_") or c.startswith("gt_"))
                   and df[c].dtype in (pl.Float32, pl.Float64)]
 
+    # Validate computed scores — crash on bad data, don't fill silently
+    bad = df["pathogenicity"].is_null() | df["pathogenicity"].is_nan()
+    assert bad.sum() == 0, f"pathogenicity has {bad.sum()} null/NaN values — fix upstream"
+
     df = df.with_columns(
-        *(pl.col(c).round(4).fill_nan(None) for c in float_cols),
-        pl.col("gene_name").fill_null("?"),
-        pl.col("consequence").fill_null("unknown"),
-        pl.col("label").fill_null("?"),
-        pl.col("significance").fill_null(""),
-        pl.col("stars").fill_null(0),
-        pl.col("disease").fill_null(""),
-        pl.col("score_pathogenic").fill_null(0.0).fill_nan(0.0).round(4),
+        *(pl.col(c).round(4) for c in float_cols),
+        pl.col("pathogenicity").round(4),
         (pl.col("pos") + 1).alias("vcf_pos"),
         pl.col("consequence").replace_strict(CONSEQUENCE_DISPLAY, default=None).fill_null(
             pl.col("consequence").str.replace_all("_", " ").str.to_titlecase()
@@ -335,10 +383,6 @@ def main(
         df = df.with_columns(
             pl.col("domains").map_elements(_parse_domains, return_dtype=pl.String).alias("domains")
         )
-    elif "vep_domains" in df.columns:
-        df = df.with_columns(
-            pl.col("vep_domains").map_elements(_parse_domains, return_dtype=pl.String).alias("domains")
-        ).drop("vep_domains")
 
     # ── Compute population statistics (torch) ─────────────────────────
     logger.info("Computing population statistics...")
@@ -358,7 +402,7 @@ def main(
             head_stats[h] = {"mean": round(valid.mean().item(), 5), "std": round(valid.std().item(), 5)}
 
     # Distributions (for histograms + heatmaps)
-    scores_t = torch.tensor(df["score_pathogenic"].to_list(), dtype=torch.float32)
+    scores_t = df["pathogenicity"].to_torch().float()
     distributions: dict = {"pathogenic": _hist(scores_t, ben_mask, path_mask)}
 
     path_bool = path_mask.float()
@@ -372,8 +416,10 @@ def main(
         ref_dists[h] = ref_dist
 
         # 2D heatmap
+        delta_dist = _hist(delta_matrix[j], ben_mask, path_mask, lo=-1.0, hi=1.0)
         valid = ~ref_matrix[j].isnan() & ~var_matrix[j].isnan()
         if valid.sum() <= 10:
+            distributions[h] = {"ref": ref_dist, "delta": delta_dist}
             continue
         rv, vv, pv = ref_matrix[j][valid], var_matrix[j][valid], path_bool[valid]
         rb = (rv * HEATMAP_BINS).long().clamp(0, HEATMAP_BINS - 1)
@@ -386,7 +432,11 @@ def main(
             c = int(total[ci])
             bi, bj = divmod(ci.item(), HEATMAP_BINS)
             cells.append([bi, bj, round(float(path_c[ci]) / c * 100, 1), c])
-        distributions[h] = {"data": cells, "bins": HEATMAP_BINS}
+        distributions[h] = {
+            "data": cells, "bins": HEATMAP_BINS,
+            "ref": ref_dist,
+            "delta": _hist(delta_matrix[j], ben_mask, path_mask, lo=-1.0, hi=1.0),
+        }
 
     # Per-effect-head distribution
     eff_dists: dict[str, dict] = {}
@@ -412,33 +462,36 @@ def main(
             else:
                 distributions[h] = gt_hist
 
-    # ── Per-variant z-scores and likelihood ratios ────────────────────
-    logger.info("Computing per-variant z-scores and likelihood ratios...")
+    # ── Per-variant z-scores ────────────────────────────────────────────
+    logger.info("Computing per-variant z-scores...")
     new_cols = []
 
     for j, h in enumerate(disruption_heads):
         delta_col = delta_matrix[j]
         stats = head_stats.get(h)
 
-        # Z-score
         if stats and stats["std"] > 0:
             z = ((delta_col - stats["mean"]) / stats["std"]).abs()
         else:
             z = torch.zeros_like(delta_col)
         new_cols.append(pl.Series(f"z_{h}", z.round(decimals=2).numpy()).cast(pl.Float32))
 
-        # Ref and var likelihood ratios (computed from raw values + masks, not from histograms)
-        ref_lr = likelihood_ratio(ref_matrix[j], ben_mask, path_mask)
-        var_lr = likelihood_ratio(var_matrix[j], ben_mask, path_mask)
-        new_cols.append(pl.Series(f"ref_lr_{h}", ref_lr.round(decimals=3).numpy()).cast(pl.Float32))
-        new_cols.append(pl.Series(f"var_lr_{h}", var_lr.round(decimals=3).numpy()).cast(pl.Float32))
-
-    for j, h in enumerate(effect_heads):
-        lr = likelihood_ratio(eff_matrix[j], ben_mask, path_mask)
-        new_cols.append(pl.Series(f"lr_{h}", lr.round(decimals=3).numpy()).cast(pl.Float32))
-
     df = df.hstack(new_cols)
     logger.info(f"  Added {len(new_cols)} derived columns")
+
+    # ── Validate: computed columns must not have null/NaN ──────────────
+    # Only gt_ columns (database annotations) are allowed to be null.
+    computed_prefixes = ("ref_", "var_", "z_", "eff_")
+    for c in df.columns:
+        if not any(c.startswith(p) for p in computed_prefixes):
+            continue
+        if df[c].dtype not in (pl.Float32, pl.Float64):
+            continue
+        n_null = df[c].is_null().sum()
+        n_nan = df[c].is_nan().sum()
+        assert n_null == 0 and n_nan == 0, (
+            f"Column {c} has {n_null} nulls and {n_nan} NaNs — fix upstream data, don't fill silently"
+        )
 
     # ── Write outputs ─────────────────────────────────────────────────
     logger.info(f"Writing {output} ({df.height:,} rows, {df.width} columns)")

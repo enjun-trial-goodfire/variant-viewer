@@ -15,7 +15,7 @@ import numpy as np
 import orjson
 import polars as pl
 import torch
-from goodfire_core.storage import ActivationDataset, FilesystemStorage
+from goodfire_core.storage import FilesystemStorage
 from loguru import logger
 from sklearn.decomposition import PCA
 from umap import UMAP
@@ -32,7 +32,8 @@ K_NEIGHBORS = 10
 
 def _load_emb(path: Path, probe: str, d_hidden: int) -> tuple[torch.Tensor, list[str]]:
     storage = FilesystemStorage(path / probe)
-    dataset = ActivationDataset(storage, "embeddings", batch_size=4096, include_provenance=True)
+    from training import local_activation_dataset
+    dataset = local_activation_dataset(storage, "embeddings", batch_size=4096, include_provenance=True)
     embeddings, ids = [], []
     d_h2 = d_hidden ** 2
     for batch in dataset.training_iterator(device="cpu", n_epochs=1, shuffle=False, drop_last=False):
@@ -73,7 +74,7 @@ def compute_neighbors(emb: torch.Tensor, emb_ids: list[str], df: pl.DataFrame, k
             "variant_id",
             pl.col("gene_name").alias("gene"),
             "consequence_display", "label", "label_display",
-            pl.col("score_pathogenic").alias("score"),
+            pl.col("pathogenicity").alias("score"),
         ), on="variant_id", how="left")
         .with_columns(pl.col("gene").fill_null("?"), pl.col("consequence_display").fill_null("?"),
                       pl.col("label").fill_null("?"), pl.col("label_display").fill_null("?"),
@@ -114,7 +115,7 @@ def compute_umap(emb: torch.Tensor, emb_ids: list[str], df: pl.DataFrame, n_samp
             "variant_id",
             pl.col("gene_name").alias("gene"),
             "label",
-            pl.col("score_pathogenic").alias("score"),
+            pl.col("pathogenicity").alias("score"),
         ), on="variant_id", how="left")
         .with_columns(pl.col("gene").fill_null("?"), pl.col("label").fill_null("?"),
                       pl.col("score").fill_null(0.0).round(2))

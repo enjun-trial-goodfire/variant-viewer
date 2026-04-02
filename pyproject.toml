@@ -56,4 +56,4 @@ ignore = [
 ]
 
 [tool.uv.sources]
-goodfire-core = { path = "../goodfire-core" }
+goodfire-core = { git = "https://github.com/goodfire-ai/goodfire-core.git", tag = "v0.3.1" }

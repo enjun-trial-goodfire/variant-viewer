@@ -8,44 +8,58 @@
     ref: number;
     var: number;
     z: number;
-    ref_lr: number;
-    var_lr: number;
     head: string;
     evalStr?: string;
     description?: string;
     distributions?: Record<string, any>;
+    dist?: number;
+    spread?: number;
   }
-  let { name, ref, var: va, z, ref_lr, var_lr, head, evalStr, description, distributions }: Props = $props();
+  let { name, ref, var: va, z, head, evalStr, description, distributions, dist, spread }: Props = $props();
+
+  const localityLabel = $derived.by(() => {
+    if (dist == null) return null;
+    const absDist = Math.abs(dist);
+    const direction = dist > 0 ? 'downstream' : dist < 0 ? 'upstream' : 'at variant';
+    const distStr = absDist === 0 ? 'at variant'
+      : absDist < 100 ? `${absDist}bp ${direction}`
+      : absDist < 1000 ? `${(absDist / 1000).toFixed(1)}kb ${direction}`
+      : `${(absDist / 1000).toFixed(0)}kb ${direction}`;
+    const spreadStr = spread != null
+      ? spread <= 5 ? 'point effect' : spread <= 50 ? 'local' : 'domain-wide'
+      : null;
+    return { distStr, spreadStr, spread: spread ?? 0 };
+  });
 
   let expanded = $state(false);
   let showHelp = $state(false);
 
   const delta = $derived(va - ref);
-  const deltaBarW = $derived(Math.min(Math.abs(z) / 4 * 50, 50));
-  const deltaFracPath = $derived.by(() => {
-    const dd = distributions?.[head]?.delta;
-    if (!dd) return 0.5;
-    const { benign, pathogenic, bins, range: [lo, hi] } = dd;
-    const idx = Math.min(bins - 1, Math.max(0, Math.floor((delta - lo) / (hi - lo) * bins)));
-    const b = (benign[idx] || 0) * dd._bTotal;
-    const p = (pathogenic[idx] || 0) * dd._pTotal;
-    return (b + p) > 0 ? p / (b + p) : 0.5;
+
+  // Delta bar: width proportional to |delta|, range -1 to 1 → 0% to 50%
+  const deltaBarW = $derived(Math.abs(delta) * 50);
+
+  // Color: pathogenicity fraction at this variant's ref/var position on the heatmap.
+  // The heatmap bins ref (rows) × var (cols) and stores % pathogenic per cell.
+  const deltaColor = $derived.by(() => {
+    const hm = distributions?.[head];
+    if (!hm?.data || !hm.bins) return lrColor(0.5);
+    const bins = hm.bins;
+    const rb = Math.min(bins - 1, Math.max(0, Math.floor(ref * bins)));
+    const vb = Math.min(bins - 1, Math.max(0, Math.floor(va * bins)));
+    const cell = hm.data.find((c: number[]) => c[0] === rb && c[1] === vb);
+    // cell = [refBin, varBin, pathPct, count]
+    const fracPath = cell ? cell[2] / 100 : 0.5;
+    return lrColor(fracPath);
   });
-  const deltaBarColor = $derived(lrColor(deltaFracPath));
-  const zLabel = $derived(z > 0 ? `${z.toFixed(1)}\u03C3` : '');
+
   const heatmapData = $derived(distributions?.[head]?.data ? distributions[head] : null);
   const refDist = $derived(distributions?.[head]?.ref ?? null);
   const deltaDist = $derived(distributions?.[head]?.delta ?? null);
   const hasHelp = $derived(!!(evalStr || description));
 
-  function toggle() {
-    expanded = !expanded;
-  }
-
-  function toggleHelp(e: MouseEvent) {
-    e.stopPropagation();
-    showHelp = !showHelp;
-  }
+  function toggle() { expanded = !expanded; }
+  function toggleHelp(e: MouseEvent) { e.stopPropagation(); showHelp = !showHelp; }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -57,16 +71,16 @@
     {/if}
   </div>
   <div class="col-refvar">
-    <div class="bar-ref" style="width:{ref > 0 ? Math.max(2, ref * 100) : 0}%;background:#bbb"></div>
-    <div class="bar-var" style="width:{va > 0 ? Math.max(2, va * 100) : 0}%;background:#999"></div>
+    <div class="bar-ref" style="width:{ref > 0 ? Math.max(2, ref * 100) : 0}%"></div>
+    <div class="bar-var" style="width:{va > 0 ? Math.max(2, va * 100) : 0}%"></div>
   </div>
   <div class="col-delta">
     <div class="delta-center"></div>
-    <div class="delta-fill" style="{delta >= 0 ? `left:50%;width:${deltaBarW}%` : `right:50%;width:${deltaBarW}%`};background:{deltaBarColor}"></div>
+    <div class="delta-fill" style="{delta >= 0 ? `left:50%;width:${deltaBarW}%` : `right:50%;width:${deltaBarW}%`};background:{deltaColor}"></div>
   </div>
   <div class="col-values">
-    <span style="color:{deltaBarColor};font-weight:600">{delta > 0 ? '+' : ''}{delta.toFixed(3)}</span>
-    <span class="sigma" style="color:{deltaBarColor}">{zLabel}</span>
+    <span style="color:{deltaColor};font-weight:600">{delta > 0 ? '+' : ''}{delta.toFixed(2)}</span>
+    <span class="sigma" style="color:{deltaColor}">{z > 0 ? `${z.toFixed(1)}\u03C3` : ''}</span>
   </div>
 </div>
 
@@ -81,6 +95,16 @@
 {/if}
 
 {#if expanded}
+  {#if localityLabel}
+    <div class="locality-bar">
+      <span class="locality-dist">{localityLabel.distStr}</span>
+      {#if localityLabel.spreadStr}
+        <span class="locality-badge" class:point={localityLabel.spread <= 5} class:local={localityLabel.spread > 5 && localityLabel.spread <= 50} class:domain={localityLabel.spread > 50}>
+          {localityLabel.spreadStr} · {localityLabel.spread} positions
+        </span>
+      {/if}
+    </div>
+  {/if}
   <div class="expand-row">
     <div class="expand-cell">
       {#if heatmapData}
@@ -89,12 +113,12 @@
     </div>
     <div class="expand-cell">
       {#if refDist}
-        <ScoreHistogram histogram={refDist} markers={[{value: ref, color: '#333', dash: [2,2], label: 'ref'}, {value: va, color: '#c55', dash: [6,3], label: 'var'}]} title="Score Distribution (··· ref, --- var)" />
+        <ScoreHistogram histogram={refDist} markers={[{value: ref, color: '#333', label: 'ref'}, {value: va, color: '#c55', label: 'var'}]} title="Score Distribution" />
       {/if}
     </div>
     <div class="expand-cell">
       {#if deltaDist}
-        <ScoreHistogram histogram={deltaDist} markers={[{value: delta, color: '#333', dash: [6,3], label: 'Δ'}]} title="Delta Distribution (var − ref)" />
+        <ScoreHistogram histogram={deltaDist} markers={[{value: delta, color: '#333', label: 'Δ'}]} title="Delta Distribution" />
       {/if}
     </div>
     <div></div>
@@ -123,8 +147,8 @@
     display: flex; flex-direction: column; gap: 1px;
     background: var(--bg-track); border-radius: 2px; padding: 1px;
   }
-  .bar-ref { height: 7px; border-radius: 2px; opacity: 0.5; }
-  .bar-var { height: 7px; border-radius: 2px; }
+  .bar-ref { height: 7px; border-radius: 2px; background: #ccc; }
+  .bar-var { height: 7px; border-radius: 2px; background: #999; }
 
   .col-delta {
     height: 16px; position: relative;
@@ -154,4 +178,29 @@
     min-width: 0;
     padding: 4px;
   }
+
+  .locality-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    margin: 4px 0;
+    background: var(--bg-hover);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .locality-dist {
+    font-family: "SF Mono", monospace;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .locality-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .locality-badge.point { background: #d4edda; color: #1b5e20; }
+  .locality-badge.local { background: #d6e4f0; color: #1a3a5c; }
+  .locality-badge.domain { background: #f0d4d4; color: #5c1a1a; }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import DisruptionRow from '../DisruptionRow.svelte';
-  import Swatch from '../Swatch.svelte';
+  import PathogenicityLegend from '../PathogenicityLegend.svelte';
   import type { Variant, GlobalData } from '../../lib/types';
 
   interface Props { variant: Variant; global: GlobalData; }
@@ -16,25 +16,20 @@
     return e ? `${e.metric}=${e.value}` : undefined;
   }
 
-  const DELTA_THRESHOLD = 0.03;
-  const DELTA_STEEPNESS = 150;
-  function gatedScore(delta: number, z: number): number {
-    const gate = 1 / (1 + Math.exp(-DELTA_STEEPNESS * (Math.abs(delta) - DELTA_THRESHOLD)));
-    return gate * Math.abs(z);
-  }
-
   // Use Ryo's curated group order from heads.json _meta
   const curatedGroups = $derived(g.heads?._meta?.curated_disruption_groups ?? []);
 
+  // Rank by |delta| / σ — combines magnitude with statistical significance
   const topItems = $derived.by(() => {
     return Object.entries(v.disruption ?? {})
       .map(([head, d]) => {
         const delta = d.var - d.ref;
-        const score = gatedScore(delta, d.z);
-        return { head, display: headsConfig[head]?.display ?? head, eval: evalStr(head), score, ...d };
+        const std = headsConfig[head]?.std ?? 1;
+        const score = std > 0 ? Math.abs(delta) / std : 0;
+        return { head, display: headsConfig[head]?.display ?? head, eval: evalStr(head), score, delta, ...d };
       })
       .filter(d => {
-        if (d.z < 1) return false;
+        if (d.score < 1) return false;
         const info = headsConfig[d.head];
         if (!info || info.quality === 'removed') return false;
         const group = info.group ?? 'Other';
@@ -52,9 +47,12 @@
       const group = info.group ?? 'Other';
       // Only include groups in the curated list
       if (curatedGroups.length && !curatedGroups.includes(group)) continue;
-      (groups[group] ??= []).push({ head, display: info.display ?? head, eval: evalStr(head), score: 0, ...d });
+      const delta = d.var - d.ref;
+      const std = info.std ?? 1;
+      const score = std > 0 ? Math.abs(delta) / std : 0;
+      (groups[group] ??= []).push({ head, display: info.display ?? head, eval: evalStr(head), score, delta, ...d });
     }
-    for (const items of Object.values(groups)) items.sort((a, b) => b.z - a.z);
+    for (const items of Object.values(groups)) items.sort((a, b) => b.score - a.score);
     // Return in curated order
     if (curatedGroups.length) {
       return curatedGroups
@@ -73,20 +71,15 @@
       <button class="help-btn" onclick={() => showHelp = !showHelp}>?</button>
     </div>
     <div class="legend-cell">
-      <span class="swatch-inline" style="background:#bbb"></span><span class="ll">ref</span>
-      <span class="swatch-inline" style="background:#999;margin-left:6px"></span><span class="ll">var</span>
+      <span class="ll">ref</span><span class="swatch-inline" style="background:#ccc"></span><span class="swatch-inline" style="background:#999"></span><span class="ll">var</span>
     </div>
-    <div class="legend-cell">
-      <span class="ll">benign</span>
-      <Swatch color="#2178ab" label="Benign" /><Swatch color="#bbbbbb" label="Neutral" /><Swatch color="#cc5555" label="Pathogenic" />
-      <span class="ll">pathogenic</span>
-    </div>
+    <div class="legend-cell"><PathogenicityLegend /></div>
     <div></div>
   </div>
 
   <div class="help-panel" class:open={showHelp}>
     <div class="help-panel-inner">
-      Each row shows a biological feature. Left bars: ref (faded) and var (solid) probe scores. Right bar: &Delta; (var &minus; ref) with z-score.
+      Each row shows a biological feature at the most disrupted position. Left: ref and var probe predictions (0&ndash;1). Right: &Delta; (var &minus; ref), colored by pathogenicity likelihood. Click a row for heatmap and locality.
     </div>
   </div>
 
@@ -94,7 +87,7 @@
     <div style="padding:12px 0;color:var(--text-muted);font-size:13px">No significant disruption</div>
   {:else}
     {#each topItems as item}
-      <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} ref_lr={item.ref_lr} var_lr={item.var_lr} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} />
+      <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} dist={item.dist} spread={item.spread} />
     {/each}
   {/if}
 
@@ -105,7 +98,7 @@
       <div class="profile-group">
         <div class="profile-group-title">{group}</div>
         {#each items as item}
-          <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} ref_lr={item.ref_lr} var_lr={item.var_lr} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} />
+          <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} dist={item.dist} spread={item.spread} />
         {/each}
       </div>
     {/each}

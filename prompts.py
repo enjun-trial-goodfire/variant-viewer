@@ -87,21 +87,13 @@ def build_prompt(v: dict) -> str:
     for heads in curated_dis.values():
         curated_dis_heads.update(heads)
 
-    # Load head stats for z-score computation
+    # Head stats (mean/std) come from builds/heads.json — each head has mean/std fields
     import json as _json
-    _stats_path = Path("head_stats.json")
-    if not _stats_path.exists():
-        # Try loading from global.json in any recent build
-        import glob as _glob
-        for gp in sorted(_glob.glob("/tmp/variant_viewer_*/global.json"), reverse=True):
-            _g = _json.loads(Path(gp).read_text())
-            if "head_stats" in _g:
-                _head_stats = _g["head_stats"]
-                break
-        else:
-            _head_stats = {}
-    else:
-        _head_stats = _json.loads(_stats_path.read_text())
+    _heads_path = Path("builds/heads.json")
+    _heads_data = _json.loads(_heads_path.read_text()) if _heads_path.exists() else {}
+    _head_stats = {h: {"mean": info["mean"], "std": info["std"]}
+                   for h, info in _heads_data.get("heads", {}).items()
+                   if "mean" in info and "std" in info}
 
     if disruption and curated_dis_heads:
         # Filter, compute z-scores, sort by |z|

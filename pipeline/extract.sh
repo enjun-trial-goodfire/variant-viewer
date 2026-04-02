@@ -30,6 +30,16 @@ for arg in "$@"; do
     prev="$arg"
 done
 
+# Clean stale SQLite WAL locks (NFS + WAL = deadlock).
+# Only shard 0 cleans to avoid races between shards.
+if [[ "${SLURM_ARRAY_TASK_ID}" == "0" ]]; then
+    for arg in "$@"; do
+        if [[ -d "$arg/activations" ]]; then
+            rm -f "$arg/activations/index.sqlite-wal" "$arg/activations/index.sqlite-shm"
+        fi
+    done
+fi
+
 echo "=== Extract shard ${SLURM_ARRAY_TASK_ID}/${SLURM_ARRAY_TASK_COUNT:-1} on $(hostname) ==="
 
 uv run --frozen python pipeline/extract.py \

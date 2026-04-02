@@ -87,7 +87,7 @@
     </div>
     <div class="verdict-score">
       <div class="score-label">Predicted<br>Pathogenicity</div>
-      <div class="number" style="color:{scoreColor(v.score_pathogenic)}">{(v.score_pathogenic * 100).toFixed(0)}%</div>
+      <div class="number" style="color:{scoreColor(v.pathogenicity)}">{(v.pathogenicity * 100).toFixed(0)}%</div>
     </div>
   </div>
 </div>

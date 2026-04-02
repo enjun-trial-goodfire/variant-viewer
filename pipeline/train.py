@@ -15,14 +15,12 @@ import json
 import os
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 import torch
 import torch.distributed as dist
 import typer
-import wandb
 from goodfire_core.data.interfaces import TensorActivations
-from goodfire_core.storage import ActivationDataset, FilesystemStorage
+from goodfire_core.storage import FilesystemStorage
 from goodfire_core.training.optimizers import EMuon
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
@@ -31,7 +29,14 @@ from tqdm import tqdm
 from paths import DATA, DECONFOUNDED
 from pipeline.extract import unified_diff, unified_ref
 from probe.covariance import MultiHeadCovProbeV2, multihead_loss_v2
-from training import ddp_context, gene_split, load_head_specs
+from training import (
+    ddp_context,
+    fire_callbacks,
+    gene_split,
+    load_head_specs,
+    local_activation_dataset,
+    setup_training_callbacks,
+)
 
 
 # ── Training ─────────────────────────────────────────────────────────────
@@ -56,16 +61,42 @@ def train(
     with ddp_context() as (device, rank, world_size):
         distributed = world_size > 1
         _train_inner(
-            name, activations, preset, d_model, d_hidden, d_probe,
-            epochs, lr, batch_size, test_size, seed, focal_gamma,
-            device, rank, world_size, distributed,
+            name,
+            activations,
+            preset,
+            d_model,
+            d_hidden,
+            d_probe,
+            epochs,
+            lr,
+            batch_size,
+            test_size,
+            seed,
+            focal_gamma,
+            device,
+            rank,
+            world_size,
+            distributed,
         )
 
 
 def _train_inner(
-    name, activations, preset, d_model, d_hidden, d_probe,
-    epochs, lr, batch_size, test_size, seed, focal_gamma,
-    device, rank, world_size, distributed,
+    name,
+    activations,
+    preset,
+    d_model,
+    d_hidden,
+    d_probe,
+    epochs,
+    lr,
+    batch_size,
+    test_size,
+    seed,
+    focal_gamma,
+    device,
+    rank,
+    world_size,
+    distributed,
 ):
     # Heads
     disruption_specs, effect_specs = load_head_specs()
@@ -83,16 +114,19 @@ def _train_inner(
     train_df, test_df = gene_split(labeled, test_size=test_size, seed=seed)
     train_ids = train_df["variant_id"].to_list()
 
-    label_cols = []
-    for h in head_names:
-        if h in labeled.columns:
-            label_cols.append(labeled[h].to_numpy().astype("float32"))
-        else:
-            spec = all_specs[h]
-            fill = float("nan") if spec.kind == "continuous" else -1.0
-            label_cols.append(np.full(labeled.height, fill, dtype=np.float32))
-    label_matrix = torch.from_numpy(np.stack(label_cols, axis=1))
-    id_to_idx = {vid: i for i, vid in enumerate(labeled["variant_id"].to_list())}
+    # Build label matrix: bulk polars → torch (no per-column .to_list())
+    present = [h for h in head_names if h in labeled.columns]
+    missing_heads = [h for h in head_names if h not in labeled.columns]
+    fill_exprs = []
+    for h in missing_heads:
+        spec = all_specs[h]
+        fill = float("nan") if spec.kind == "continuous" else -1.0
+        fill_exprs.append(pl.lit(fill).cast(pl.Float32).alias(h))
+    label_df = labeled.select(
+        [pl.col(h).fill_null(float("nan")).cast(pl.Float32) for h in present] + fill_exprs
+    ).select(list(head_names))  # reorder to match head_names
+    label_matrix = label_df.to_torch(dtype=pl.Float32)  # [N, n_heads]
+    id_to_idx = dict(zip(labeled["variant_id"].to_physical().to_list(), range(labeled.height)))
 
     missing = torch.full((len(head_names),), float("nan"), dtype=torch.float32)
     for i, spec in enumerate(specs_tuple):
@@ -114,7 +148,7 @@ def _train_inner(
     # Iterator
     storage = FilesystemStorage(activations)
     per_gpu = max(1, batch_size // world_size)
-    dataset = ActivationDataset(storage, "activations", batch_size=per_gpu)
+    dataset = local_activation_dataset(storage, "activations", batch_size=per_gpu)
     iterator = dataset.training_iterator(device=str(device), n_epochs=epochs, sequence_ids=train_ids)
 
     # Sync step counts across DDP ranks to prevent deadlocks from uneven chunk sizes.
@@ -139,29 +173,54 @@ def _train_inner(
 
     # Probe
     probe = MultiHeadCovProbeV2(
-        d_model=d_model, heads=all_specs, d_hidden=d_hidden, d_probe=d_probe,
+        d_model=d_model,
+        heads=all_specs,
+        d_hidden=d_hidden,
+        d_probe=d_probe,
     ).to(device)
     optimizer = EMuon(probe.parameters(), lr=lr)
 
     if distributed:
         probe = DistributedDataParallel(probe, device_ids=[rank])
 
+    config = {
+        "preset": preset,
+        "seed": seed,
+        "test_size": test_size,
+        "d_model": d_model,
+        "d_hidden": d_hidden,
+        "d_probe": d_probe,
+        "lr": lr,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "focal_gamma": focal_gamma,
+        "training": "dual_pass",
+        "n_disruption_heads": len(disruption_specs),
+        "n_effect_heads": len(effect_specs),
+    }
+    callbacks = setup_training_callbacks(
+        project="gfm-probes",
+        name=name,
+        config=config,
+        checkpoint_dir=str(out_dir),
+        rank=rank,
+    )
+    fire_callbacks(callbacks, "on_train_begin")
+
     if rank == 0:
-        wandb.init(project="gfm-probes", name=name, config={
-            "preset": preset, "seed": seed, "test_size": test_size,
-            "d_model": d_model, "d_hidden": d_hidden, "d_probe": d_probe,
-            "lr": lr, "epochs": epochs, "batch_size": batch_size,
-            "focal_gamma": focal_gamma,
-            "n_disruption_heads": len(disruption_specs),
-            "n_effect_heads": len(effect_specs),
-        })
         logger.info(f"Train: {len(train_ids):,} variants, {iterator.steps_per_epoch} steps/epoch")
 
     # Train
+    raw_p = probe.module if distributed else probe  # unwrap once, reuse everywhere
+    step = 0
     for epoch in range(epochs):
         probe.train()
-        pbar = tqdm(iterator.iter_epoch(), total=iterator.steps_per_epoch,
-                    desc=f"Epoch {epoch+1}/{epochs}", disable=rank != 0)
+        fire_callbacks(callbacks, "on_epoch_begin", epoch=epoch)
+        pbar = tqdm(
+            iterator.iter_epoch(), total=iterator.steps_per_epoch, desc=f"Epoch {epoch + 1}/{epochs}", disable=rank != 0
+        )
+        epoch_loss = 0.0
+        epoch_samples = 0
 
         for batch in pbar:
             if batch.batch_size == 0 or batch.labels is None:
@@ -180,13 +239,17 @@ def _train_inner(
 
             # Pass 1: diff → effect heads
             loss_diff = multihead_loss_v2(
-                probe(unified_diff(raw)), diff_labels, specs_tuple,
+                probe(unified_diff(raw)),
+                diff_labels,
+                specs_tuple,
                 focal_gamma=focal_gamma,
             )
 
             # Pass 2: ref → disruption heads
             loss_ref = multihead_loss_v2(
-                probe(unified_ref(raw)), ref_labels, specs_tuple,
+                probe(unified_ref(raw)),
+                ref_labels,
+                specs_tuple,
                 focal_gamma=focal_gamma,
             )
 
@@ -195,34 +258,39 @@ def _train_inner(
             loss.backward()
             optimizer.step()
 
+            step += 1
+            epoch_loss += loss.item() * batch.batch_size
+            epoch_samples += batch.batch_size
+
             if rank == 0:
-                pbar.set_postfix(loss=f"{loss.item():.3f}", diff=f"{loss_diff.item():.3f}", ref=f"{loss_ref.item():.3f}")
-                wandb.log({"loss": loss.item(), "loss_diff": loss_diff.item(), "loss_ref": loss_ref.item()})
+                pbar.set_postfix(
+                    loss=f"{loss.item():.3f}", diff=f"{loss_diff.item():.3f}", ref=f"{loss_ref.item():.3f}"
+                )
+                fire_callbacks(
+                    callbacks, "on_step_end", step=step, loss=loss.item(), batch_size=batch.batch_size, log_frequency=1
+                )
 
-        if rank == 0:
-            raw_p = probe.module if distributed else probe
-            raw_p.save_checkpoint(str(out_dir / f"checkpoint_epoch_{epoch+1}.pt"))
+        fire_callbacks(
+            callbacks, "on_epoch_end", model=raw_p, epoch=epoch, train_loss=epoch_loss / max(epoch_samples, 1)
+        )
 
-    # Save
+    # Save final weights + config
     if rank == 0:
-        raw_p = probe.module if distributed else probe
         raw_p.save_checkpoint(str(out_dir / "weights.pt"))
-        (out_dir / "config.json").write_text(json.dumps({
-            "preset": preset, "seed": seed, "test_size": test_size,
-            "d_model": d_model, "d_hidden": d_hidden, "d_probe": d_probe,
-            "lr": lr, "epochs": epochs, "batch_size": batch_size,
-            "training": "dual_pass",
-            "effect_heads_view": "diff",
-            "disruption_heads_view": "ref",
-            "disruption_heads": list(disruption_specs.keys()),
-            "effect_heads": list(effect_specs.keys()),
-            "n_disruption_heads": len(disruption_specs),
-            "n_effect_heads": len(effect_specs),
-            "n_train": train_df.height, "n_test": test_df.height,
-            "focal_gamma": focal_gamma,
-        }, indent=2))
-        wandb.finish()
+        config.update(
+            {
+                "effect_heads_view": "diff",
+                "disruption_heads_view": "ref",
+                "disruption_heads": list(disruption_specs.keys()),
+                "effect_heads": list(effect_specs.keys()),
+                "n_train": train_df.height,
+                "n_test": test_df.height,
+            }
+        )
+        (out_dir / "config.json").write_text(json.dumps(config, indent=2))
         logger.info(f"Saved: {out_dir / 'weights.pt'}")
+
+    fire_callbacks(callbacks, "on_train_end", model=raw_p, epoch=epochs - 1)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────

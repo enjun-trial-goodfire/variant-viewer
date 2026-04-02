@@ -61,7 +61,9 @@ class _FactoredHead(nn.Module):
     def forward(self, cov: Tensor) -> Tensor:
         hidden = torch.einsum(
             "blr,hl,hr->bh",
-            cov, self.head_left.weight, self.head_right.weight,
+            cov,
+            self.head_left.weight,
+            self.head_right.weight,
         )
         return self.out(hidden)
 
@@ -101,10 +103,9 @@ class MultiHeadCovProbeV2(nn.Module):
         self.register_buffer("_eye", torch.eye(d_hidden))
 
         # Per-head factored bilinear classifiers
-        self.head_modules = nn.ModuleDict({
-            name: _FactoredHead(d_hidden, d_probe, spec.n_outputs)
-            for name, spec in heads.items()
-        })
+        self.head_modules = nn.ModuleDict(
+            {name: _FactoredHead(d_hidden, d_probe, spec.n_outputs) for name, spec in heads.items()}
+        )
 
     @property
     def name(self) -> str:
@@ -123,7 +124,10 @@ class MultiHeadCovProbeV2(nn.Module):
         return sum(self.head_sizes)
 
     def _resolve_mask(
-        self, x: Tensor, attn_mask: Tensor | None, lengths: Tensor | None,
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None,
+        lengths: Tensor | None,
     ) -> Tensor | None:
         if attn_mask is None and lengths is not None:
             return torch.arange(x.size(1), device=x.device).unsqueeze(0) < lengths.unsqueeze(1)
@@ -149,14 +153,20 @@ class MultiHeadCovProbeV2(nn.Module):
         return cov
 
     def forward(
-        self, x: Tensor, attn_mask: Tensor | None = None, lengths: Tensor | None = None,
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        lengths: Tensor | None = None,
     ) -> Tensor:
         """Packed logits [B, sum(head_sizes)]."""
         cov = self.embedding(x, attn_mask=self._resolve_mask(x, attn_mask, lengths))
         return torch.cat([self.head_modules[n](cov) for n in self.head_names], dim=-1)
 
     def forward_dict(
-        self, x: Tensor, attn_mask: Tensor | None = None, lengths: Tensor | None = None,
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        lengths: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Per-head logits as a dict."""
         cov = self.embedding(x, attn_mask=self._resolve_mask(x, attn_mask, lengths))
@@ -193,7 +203,10 @@ class MultiHeadCovProbeV2(nn.Module):
 
 
 def _soft_cross_entropy(
-    logits: Tensor, targets: Tensor, n_bins: int, sigma: float = 0.05,
+    logits: Tensor,
+    targets: Tensor,
+    n_bins: int,
+    sigma: float = 0.05,
 ) -> Tensor:
     """Cross-entropy between logits and soft-binned continuous targets.
 
@@ -253,13 +266,15 @@ def multihead_loss_v2(
         offset += spec.n_outputs
 
     total_loss = logits.new_tensor(0.0)
+    n_groups = 0
 
     for (kind, n_classes, weight), members in groups.items():
         head_indices = [m[0] for m in members]
         logit_offsets = [m[1] for m in members]
 
         group_logits = torch.stack(
-            [logits[:, o:o + n_classes] for o in logit_offsets], dim=1,
+            [logits[:, o : o + n_classes] for o in logit_offsets],
+            dim=1,
         )
         group_labels = labels[:, head_indices]
 
@@ -282,7 +297,6 @@ def multihead_loss_v2(
             flat_logits = group_logits[valid]
             flat_labels = group_labels[valid].long()
 
-            # Compute inverse-frequency class weights
             ce_weight = None
             if class_balance:
                 counts = torch.bincount(flat_labels, minlength=n_classes).float().clamp(min=1)
@@ -294,5 +308,6 @@ def multihead_loss_v2(
                 loss = torch.nn.functional.cross_entropy(flat_logits, flat_labels, weight=ce_weight)
 
         total_loss = total_loss + weight * loss
+        n_groups += 1
 
-    return total_loss
+    return total_loss / max(n_groups, 1)

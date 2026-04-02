@@ -11,6 +11,6 @@
 
 {#if dist}
   <HelpCard title="Score Distribution" helpText="Histogram of predicted pathogenicity scores across all 232K labeled ClinVar variants. Blue bars = benign-labeled variants, red bars = pathogenic-labeled variants. The vertical black line marks this variant's predicted score. Good separation between the blue and red distributions indicates the probe discriminates well.">
-    <HeadHistogram histogram={dist} variantValue={v.score_pathogenic} headName="Pathogenicity" />
+    <HeadHistogram histogram={dist} variantValue={v.pathogenicity} headName="Pathogenicity" />
   </HelpCard>
 {/if}

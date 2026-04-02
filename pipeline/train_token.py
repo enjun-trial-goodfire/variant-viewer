@@ -1,34 +1,40 @@
-"""Train per-token binary probe on reference activations.
+"""Train per-token probe on reference activations.
 
-Minimal diff from pipeline/train.py. Same batch_size, same training_iterator,
-same DDP. Only changes: heads (binary only), labels (per-token from
-token_labels_binary), forward (unpack tokens), single-pass (no dual view).
+Supports binary and continuous heads. Labels loaded from safetensors (mmap'd,
+per-head keyed). Each DDP rank only touches its slice of variants via the OS
+page cache — no explicit sharding needed.
+
+Requires token_labels.safetensors + token_labels.json from build_token_labels.py.
 
 Usage:
-    sbatch --gpus=8 pipeline/train_token.sh --name probe_token_v1
+    sbatch --gpus=8 pipeline/train_token.sh --name probe_token_v2
 """
 
 import json
+import math
 import os
 from pathlib import Path
 
 import torch
 import torch.distributed as dist
 import typer
-import wandb
 from goodfire_core.data.interfaces import TensorActivations
-from goodfire_core.storage import ActivationDataset, FilesystemStorage
+from goodfire_core.storage import FilesystemStorage
 from goodfire_core.training.optimizers import EMuon
 from loguru import logger
+from safetensors import safe_open
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
 from paths import DECONFOUNDED
 from probe.covariance import HeadSpec, MultiHeadCovProbeV2, multihead_loss_v2
-from training import ddp_context
+from training import (
+    ddp_context,
+    fire_callbacks,
+    local_activation_dataset,
+    setup_training_callbacks,
+)
 
-
-# ── CHANGE 1: token unpacking (replaces unified_diff/unified_ref) ───────
 
 def unpack_ref_tokens(raw: torch.Tensor) -> torch.Tensor:
     """[B, 2, 3, 256, 4096] → [B*512, 1, 8192] per-token bidirectional ref."""
@@ -37,7 +43,59 @@ def unpack_ref_tokens(raw: torch.Tensor) -> torch.Tensor:
     return torch.cat([fwd_tokens, bwd_tokens], dim=1).reshape(-1, 1, 8192)
 
 
-# ── Training (identical structure to train.py) ──────────────────────────
+# ── Label loading ─────────────────────────────────────────────────────
+
+
+def load_token_labels(
+    activations: Path,
+) -> tuple[
+    dict[str, int],  # id_to_idx
+    list[torch.Tensor],  # per-head label tensors [N, 512] (mmap'd)
+    list[str],  # head names (ordered: binary first, then continuous)
+    list[HeadSpec],  # head specs (same order)
+]:
+    """Load token labels from safetensors + JSON sidecar.
+
+    Returns mmap'd tensors — no memory cost until rows are accessed.
+    """
+    labels_path = activations / "token_labels.safetensors"
+    meta_path = activations / "token_labels.json"
+
+    if not labels_path.exists():
+        raise FileNotFoundError(
+            f"{labels_path} not found. Run: uv run python pipeline/build_token_labels.py {activations}"
+        )
+
+    meta = json.loads(meta_path.read_text())
+    id_to_idx = {vid: i for i, vid in enumerate(meta["ids"])}
+
+    binary_heads = meta["binary_heads"]
+    continuous_heads = meta.get("continuous_heads", [])
+    n_continuous_bins = 16
+
+    # Build ordered head names + specs
+    head_names: list[str] = []
+    head_specs: list[HeadSpec] = []
+    for h in binary_heads:
+        head_names.append(h)
+        head_specs.append(HeadSpec(n_classes=2, kind="binary"))
+    # Each continuous head's init loss is log(n_bins). Scale so it matches
+    # binary init loss log(2), keeping the per-head average at log(2).
+    continuous_weight = math.log(2) / math.log(n_continuous_bins)
+    for h in continuous_heads:
+        head_names.append(h)
+        head_specs.append(HeadSpec(n_classes=n_continuous_bins, kind="continuous", weight=continuous_weight))
+
+    # Load tensors via mmap
+    # safe_open mmaps the file; we hold a reference to keep it alive for training.
+    # Tensors returned by get_tensor() are views into the mmap.
+    label_file = safe_open(str(labels_path), framework="pt", device="cpu")
+    label_tensors = [label_file.get_tensor(h) for h in head_names]  # each [N, 512]
+
+    return id_to_idx, label_tensors, head_names, head_specs, label_file
+
+
+# ── Training ──────────────────────────────────────────────────────────
 
 
 def train(
@@ -57,34 +115,18 @@ def train(
     with ddp_context() as (device, rank, world_size):
         distributed = world_size > 1
 
-        # CHANGE 2: heads — binary disruption only
-        head_names = tuple(json.loads(
-            (activations / "token_labels_binary" / "head_names.json").read_text()
-        ))
-        specs = {name: HeadSpec(n_classes=2, kind="binary") for name in head_names}
-        specs_tuple = tuple(specs.values())
-        n_heads = len(specs)
+        # Load labels (mmap'd — each rank opens the file, OS shares pages)
+        id_to_idx, label_tensors, head_names, head_specs, _label_file = load_token_labels(activations)
+        specs = dict(zip(head_names, head_specs))
+        specs_tuple = tuple(head_specs)
+        n_heads = len(head_names)
+        n_binary = sum(1 for s in head_specs if s.kind == "binary")
+        n_continuous = n_heads - n_binary
 
         if rank == 0:
-            logger.info(f"Heads: {n_heads} binary disruption")
-
-        # CHANGE 3: labels — contiguous tensor from token_labels_binary
-        storage = FilesystemStorage(activations)
-        labels_ds = ActivationDataset(storage, "token_labels_binary", batch_size=512, include_provenance=True)
-        all_ids: list[str] = []
-        all_labels: list[torch.Tensor] = []
-        for chunk_id in tqdm(range(labels_ds.num_chunks), desc="Loading token labels", disable=rank != 0):
-            chunk = labels_ds.load_chunk(chunk_id)
-            all_ids.extend(chunk.sequence_ids)
-            all_labels.append(chunk.acts)
-        label_matrix = torch.cat(all_labels, dim=0)  # [N, n_heads, 512] uint8
-        id_to_idx = {vid: i for i, vid in enumerate(all_ids)}
-        del all_labels, all_ids
-
-        if rank == 0:
-            logger.info(f"Token labels: {label_matrix.shape}, {label_matrix.nbytes / 1e9:.1f} GB")
-
-        missing_label = torch.full((n_heads, 512), 255, dtype=torch.uint8)
+            logger.info(f"Heads: {n_binary} binary + {n_continuous} continuous = {n_heads}")
+            total_gb = sum(t.nbytes for t in label_tensors) / 1e9
+            logger.info(f"Labels: {total_gb:.1f} GB safetensors (mmap'd)")
 
         # Output
         out_dir = activations / name
@@ -94,9 +136,10 @@ def train(
         if distributed:
             dist.barrier()
 
-        # Iterator — SAME as sequence probe
+        # Iterator for raw activations
+        storage = FilesystemStorage(activations)
         per_gpu = max(1, batch_size // world_size)
-        dataset = ActivationDataset(storage, "activations", batch_size=per_gpu)
+        dataset = local_activation_dataset(storage, "activations", batch_size=per_gpu)
         iterator = dataset.training_iterator(device=str(device), n_epochs=epochs)
 
         if distributed:
@@ -104,7 +147,7 @@ def train(
             dist.all_reduce(steps, op=dist.ReduceOp.MIN)
             iterator.set_max_steps(int(steps.item()))
 
-        # CHANGE 4: inject token labels (same pattern, different reshape)
+        # Inject per-token labels from safetensors
         def inject_labels(batch):
             tokens = unpack_ref_tokens(batch.acts.float())  # [B*512, 1, 8192]
             B = batch.acts.shape[0]
@@ -112,21 +155,34 @@ def train(
             indices = [id_to_idx.get(sid, -1) for sid in batch.sequence_ids]
             idx_t = torch.tensor(indices, dtype=torch.long)
             known = idx_t >= 0
+            known_idx = idx_t[known]
 
-            raw_labels = missing_label.unsqueeze(0).expand(B, -1, -1).clone()
+            # Build [B, 512, n_heads] label matrix from per-head tensors
+            labels = torch.full((B, 512, n_heads), -1.0)  # default: masked
+
             if known.any():
-                raw_labels[known] = label_matrix[idx_t[known]]
+                for h_idx, (tensor, spec) in enumerate(zip(label_tensors, head_specs)):
+                    head_data = tensor[known_idx]  # [n_known, 512], mmap'd read
+                    if spec.kind == "binary":
+                        col = head_data.float()
+                        col[col == 255] = -1  # missing → masked
+                        labels[known, :, h_idx] = col
+                    else:
+                        col = head_data.float()
+                        # NaN stays NaN (continuous missing marker)
+                        labels[known, :, h_idx] = col
 
-            labels = raw_labels.permute(0, 2, 1).reshape(B * 512, n_heads).float()
-            labels[labels == 255] = -1
-            labels = labels.to(tokens.device, non_blocking=True)
+            labels = labels.reshape(B * 512, n_heads).to(tokens.device, non_blocking=True)
             return TensorActivations(acts=tokens, labels=labels, sequence_ids=None)
 
         iterator.add_transform(inject_labels)
 
-        # Probe — SAME architecture, n_sqrtm_iters=0
+        # Probe
         probe = MultiHeadCovProbeV2(
-            d_model=d_model, heads=specs, d_hidden=d_hidden, d_probe=d_probe,
+            d_model=d_model,
+            heads=specs,
+            d_hidden=d_hidden,
+            d_probe=d_probe,
             n_sqrtm_iters=0,
         ).to(device)
         optimizer = EMuon(probe.parameters(), lr=lr)
@@ -134,25 +190,51 @@ def train(
         if distributed:
             probe = DistributedDataParallel(probe, device_ids=[rank])
 
-        if rank == 0:
-            wandb.init(project="gfm-probes", name=name, config={
-                "training": "token_binary", "d_model": d_model, "d_hidden": d_hidden,
-                "d_probe": d_probe, "lr": lr, "epochs": epochs, "batch_size": batch_size,
-                "focal_gamma": focal_gamma, "n_heads": n_heads, "n_sqrtm_iters": 0,
-            })
-            logger.info(f"Train: {label_matrix.shape[0]:,} variants, {iterator.steps_per_epoch} steps/epoch")
+        config = {
+            "training": "token",
+            "d_model": d_model,
+            "d_hidden": d_hidden,
+            "d_probe": d_probe,
+            "lr": lr,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "focal_gamma": focal_gamma,
+            "n_heads": n_heads,
+            "n_sqrtm_iters": 0,
+            "n_binary": n_binary,
+            "n_continuous": n_continuous,
+        }
+        callbacks = setup_training_callbacks(
+            project="gfm-probes",
+            name=name,
+            config=config,
+            checkpoint_dir=str(out_dir),
+            rank=rank,
+        )
+        fire_callbacks(callbacks, "on_train_begin")
 
-        # Train — SAME loop, single pass instead of dual
+        if rank == 0:
+            logger.info(f"Train: {len(id_to_idx):,} variants, {iterator.steps_per_epoch} steps/epoch")
+
+        # Train — single pass (no dual view)
+        raw_p = probe.module if distributed else probe
+        step = 0
         for epoch in range(epochs):
             probe.train()
-            pbar = tqdm(iterator.iter_epoch(), total=iterator.steps_per_epoch,
-                        desc=f"Epoch {epoch+1}/{epochs}", disable=rank != 0)
+            fire_callbacks(callbacks, "on_epoch_begin", epoch=epoch)
+            pbar = tqdm(
+                iterator.iter_epoch(),
+                total=iterator.steps_per_epoch,
+                desc=f"Epoch {epoch + 1}/{epochs}",
+                disable=rank != 0,
+            )
+            epoch_loss = 0.0
+            epoch_samples = 0
 
             for batch in pbar:
                 if batch.batch_size == 0 or batch.labels is None:
                     continue
 
-                # CHANGE 5: single forward pass (no dual view)
                 logits = probe(batch.acts)
                 loss = multihead_loss_v2(logits, batch.labels, specs_tuple, focal_gamma=focal_gamma)
 
@@ -161,34 +243,47 @@ def train(
 
                 optimizer.zero_grad()
                 loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(probe.parameters(), max_norm=1000.0).item()
                 optimizer.step()
 
-                if rank == 0:
-                    pbar.set_postfix(loss=f"{loss.item():.3f}")
-                    wandb.log({"loss": loss.item()})
+                step += 1
+                epoch_loss += loss.item() * batch.batch_size
+                epoch_samples += batch.batch_size
 
-        # Save
+                if rank == 0:
+                    pbar.set_postfix(loss=f"{loss.item():.3f}", gn=f"{grad_norm:.1f}")
+                    fire_callbacks(
+                        callbacks,
+                        "on_step_end",
+                        step=step,
+                        loss=loss.item(),
+                        grad_norm=grad_norm,
+                        batch_size=batch.batch_size,
+                        log_frequency=1,
+                    )
+
+            fire_callbacks(
+                callbacks, "on_epoch_end", model=raw_p, epoch=epoch, train_loss=epoch_loss / max(epoch_samples, 1)
+            )
+
+        # Save final weights + config
         if rank == 0:
-            raw_p = probe.module if distributed else probe
             raw_p.save_checkpoint(str(out_dir / "weights.pt"))
-            (out_dir / "config.json").write_text(json.dumps({
-                "training": "token_binary", "d_model": d_model, "d_hidden": d_hidden,
-                "d_probe": d_probe, "lr": lr, "epochs": epochs, "batch_size": batch_size,
-                "focal_gamma": focal_gamma, "n_sqrtm_iters": 0,
-                "heads": list(head_names), "n_heads": n_heads,
-            }, indent=2))
-            wandb.finish()
+            config["heads"] = list(head_names)
+            (out_dir / "config.json").write_text(json.dumps(config, indent=2))
             logger.info(f"Saved: {out_dir / 'weights.pt'}")
+
+        fire_callbacks(callbacks, "on_train_end", model=raw_p, epoch=epochs - 1)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
-app = typer.Typer(help="Train per-token binary probe")
+app = typer.Typer(help="Train per-token probe")
 
 
 @app.command()
 def main(
-    name: str = typer.Option("probe_token_v1", help="Output directory name"),
+    name: str = typer.Option("probe_token_v2", help="Output directory name"),
     activations: Path = typer.Option(DECONFOUNDED, help="Activations storage directory"),
     d_model: int = typer.Option(8192),
     d_hidden: int = typer.Option(64),

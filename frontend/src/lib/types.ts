@@ -47,7 +47,7 @@ export interface Variant {
   significance: string;
   stars: number;
   disease: string;
-  score_pathogenic: number;
+  pathogenicity: number;
   rs_id: string;
   allele_id: number | null;
   gene_id: string;
@@ -75,8 +75,8 @@ export interface Variant {
   last_evaluated: string | null;
   clinical_features: string[];
   origin: string;
-  disruption: Record<string, { ref: number; var: number; z: number; ref_lr: number; var_lr: number }>;
-  effect: Record<string, { value: number; lr: number }>;
+  disruption: Record<string, { ref: number; var: number; z: number; dist?: number; spread?: number }>;
+  effect: Record<string, { value: number }>;
   gt: Record<string, number>;
   attribution: Attribution[];
   neighbors: Neighbor[];

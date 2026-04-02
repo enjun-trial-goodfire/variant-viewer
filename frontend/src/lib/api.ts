@@ -1,39 +1,43 @@
-import type { GlobalData, Interpretation, SearchResult, UmapData, Variant } from './types';
+import type { GlobalData, HeadConfig, Interpretation, SearchResult, UmapData, Variant } from './types';
 
 declare global {
   interface Window { __APP_CONFIG__?: { API_BASE?: string }; }
 }
 
-// In production: API_BASE points to API Gateway. Static assets served from same S3 origin.
-// In dev: everything is /api/* via local serve.py.
 const API_BASE = window.__APP_CONFIG__?.API_BASE || '';
-
 function api(path: string): string {
   return API_BASE ? `${API_BASE}${path}` : `/api${path}`;
 }
 
+// Heads config — loaded once by getGlobal(), drives normalizeVariant().
+let _heads: Record<string, HeadConfig> = {};
+let _globalReady: Promise<void> | null = null;
+let _resolveGlobal: (() => void) | null = null;
+_globalReady = new Promise(resolve => { _resolveGlobal = resolve; });
+
 export async function getGlobal(): Promise<GlobalData> {
+  let result: GlobalData;
   if (API_BASE) {
-    // Production: static JSON files on S3
     const [heads, dist] = await Promise.all([
       fetch('/heads.json').then(r => r.json()),
       fetch('/statistics.json').then(r => r.json()),
     ]);
-    return { heads, distributions: dist };
+    result = { heads, distributions: dist };
+  } else {
+    result = await (await fetch('/api/global')).json();
   }
-  return (await fetch('/api/global')).json();
+  _heads = result.heads?.heads ?? {};
+  _resolveGlobal?.();
+  return result;
 }
 
 export async function getUmap(): Promise<UmapData | null> {
-  if (API_BASE) {
-    const resp = await fetch('/umap.json');
-    return resp.ok ? resp.json() : null;
-  }
-  const resp = await fetch('/api/umap');
+  const resp = await fetch(API_BASE ? '/umap.json' : '/api/umap');
   return resp.ok ? resp.json() : null;
 }
 
 export async function getVariant(id: string): Promise<Variant> {
+  await _globalReady;  // ensure heads.json is loaded before normalizing
   const resp = await fetch(api(`/variants/${encodeURIComponent(id)}`));
   if (!resp.ok) throw new Error(`Variant not found: ${id}`);
   return normalizeVariant(await resp.json());
@@ -76,43 +80,38 @@ export function fetchInterpretation(
 }
 
 // ── Flat row → Variant ──────────────────────────────────────────────
+//
+// Column convention (the contract):
+//   ref_{h}, var_{h}, z_{h}, dist_{h}, spread_{h}  → disruption
+//   eff_{h}                                         → effect
+//   gt_{h}                                          → ground truth
+//   everything else                                 → metadata
+//
+// _heads (from heads.json) is the schema.
 
-const JSON_FIELDS = new Set(['acmg', 'clinical_features', 'submitters', 'domains', 'neighbors', 'attribution']);
-const GNOMAD_POP_COLS = new Set(['gnomad_afr_af', 'gnomad_amr_af', 'gnomad_asj_af', 'gnomad_eas_af', 'gnomad_fin_af', 'gnomad_nfe_af', 'gnomad_sas_af']);
+const JSON_FIELDS = ['acmg', 'clinical_features', 'submitters', 'domains', 'neighbors', 'attribution'];
 
 function normalizeVariant(row: Record<string, any>): Variant {
   const disruption: Variant['disruption'] = {};
   const effect: Variant['effect'] = {};
   const gt: Record<string, number> = {};
-  const gnomad_pop: Record<string, number> = {};
-  const meta: Record<string, any> = {};
 
-  for (const [k, v] of Object.entries(row)) {
-    if (v == null) continue;
-    if (k.startsWith('ref_score_')) {
-      const h = k.slice(10);
-      const va = row[`var_score_${h}`];
-      if (va != null) {
-        disruption[h] = {
-          ref: v, var: va,
-          z: row[`z_${h}`] ?? 0,
-          ref_lr: row[`ref_lr_${h}`] ?? 0.5,
-          var_lr: row[`var_lr_${h}`] ?? 0.5,
-        };
-      }
-    } else if (k.startsWith('score_')) {
-      const h = k.slice(6);
-      effect[h] = { value: v, lr: row[`lr_${h}`] ?? 0.5 };
-    } else if (k.startsWith('gt_')) {
-      gt[k.slice(3)] = v;
-    } else if (GNOMAD_POP_COLS.has(k)) {
-      if (v > 0) gnomad_pop[k.slice(7, -3)] = v;
-    } else if (JSON_FIELDS.has(k)) {
-      meta[k] = typeof v === 'string' ? JSON.parse(v) : v;
-    } else if (!k.startsWith('var_score_') && !k.startsWith('z_') && !k.startsWith('ref_lr_') && !k.startsWith('var_lr_') && !k.startsWith('lr_')) {
-      meta[k] = v;
+  for (const [h, info] of Object.entries(_heads)) {
+    if (info.category === 'disruption') {
+      disruption[h] = {
+        ref: row[`ref_${h}`], var: row[`var_${h}`],
+        z: row[`z_${h}`],
+        dist: row[`dist_${h}`], spread: row[`spread_${h}`],
+      };
+    } else {
+      effect[h] = { value: row[`eff_${h}`] };
     }
+    if (info.predictor && row[`gt_${h}`] != null) gt[h] = row[`gt_${h}`];
   }
 
-  return { ...meta, disruption, effect, gt, gnomad_pop } as Variant;
+  for (const f of JSON_FIELDS) {
+    if (typeof row[f] === 'string') row[f] = JSON.parse(row[f]);
+  }
+
+  return { ...row, disruption, effect, gt } as Variant;
 }
