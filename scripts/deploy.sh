@@ -18,8 +18,6 @@ cd "$(dirname "$0")/.."
 
 BUILDS=builds
 FRONTEND=frontend/dist
-TABLE="variant-viewer-variants"
-REGION="us-east-1"
 
 # Parse flags
 DATA_ONLY=false
@@ -77,8 +75,8 @@ fi
 # ── 4. Ingest data to DynamoDB (skip if --frontend-only) ─────────────
 if [ "$FRONTEND_ONLY" = false ]; then
   echo ""
-  echo "Ingesting to DynamoDB..."
-  python scripts/ingest.py "$BUILDS/clean.parquet" --table "$TABLE" --region "$REGION" --wipe
+  echo "Ingesting to DynamoDB (S3 ImportTable)..."
+  uv run python scripts/ingest.py --parquet "$BUILDS/clean.parquet"
 fi
 
 # ── 5. Upload static assets to S3 ───────────────────────────────────

@@ -62,8 +62,7 @@ def handle_get_variant(variant_id):
     if not item:
         return json_response(404, {"error": "Variant not found"})
 
-    # DynamoDB GSI aliases: ingest renames gene_name→gene, score_pathogenic→score.
-    # Svelte frontend expects the original names, so add them back.
+    # DynamoDB GSI uses 'gene' and 'score'; add canonical names for the frontend.
     item.setdefault("gene_name", item.get("gene"))
     item.setdefault("score_pathogenic", item.get("score"))
 
@@ -85,18 +84,14 @@ def handle_search(query):
 
     # If exact match returned few results, also try prefix matches on other genes
     if len(results) < SEARCH_LIMIT:
-        # Scan for genes that start with the query (e.g., "BRC" → "BRCA1", "BRCA2")
-        # DynamoDB GSI query requires exact partition key, so we do a limited scan
-        # with a filter for prefix matching across different gene names
         scan_resp = table.scan(
             IndexName="gene-index",
             FilterExpression="begins_with(gene, :prefix)",
             ExpressionAttributeValues={":prefix": q},
-            Limit=1000,  # scan limit (rows examined, not returned)
+            Limit=1000,
         )
         prefix_items = scan_resp.get("Items", [])
 
-        # Merge, dedup by variant_id
         seen = {r["variant_id"] for r in results}
         for item in prefix_items:
             if item["variant_id"] not in seen:
@@ -107,7 +102,6 @@ def handle_search(query):
     results.sort(key=lambda x: float(x.get("score", 0)), reverse=True)
     results = results[:SEARCH_LIMIT]
 
-    # Map to frontend shape: {v, l, s, c}
     return json_response(200, [
         {
             "v": r["variant_id"],
