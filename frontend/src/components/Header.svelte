@@ -45,8 +45,9 @@
 
 <div class="header" style="view-transition-name: header">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-  <h1 onclick={() => navigate('')} style="cursor: pointer">
-    EVEE <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px">Evo Variant Effect Explorer</span>
+  <h1 onclick={() => navigate('')} style="cursor: pointer;display:flex;align-items:center;gap:8px">
+    <img src="/evee-logo.png" alt="" style="height:48px">
+    EVEE <span style="font-size:20px;font-weight:400;color:var(--text-muted);margin-left:4px">Evo Variant Effect Explorer</span>
   </h1>
   <div class="search-container">
     <input
@@ -86,7 +87,7 @@
     padding: 12px 24px; display: flex; align-items: center; gap: 16px;
     position: sticky; top: 0; z-index: 100;
   }
-  h1 { font-size: 20px; font-weight: 600; white-space: nowrap;
+  h1 { font-size: 28px; font-weight: 600; white-space: nowrap;
     transition: color 0.15s; }
   h1:hover { color: var(--accent); }
   input { width: 100%; padding: 8px 14px;
@@ -96,8 +97,8 @@
   input:focus { outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-light); }
   .search-container { flex: 1; max-width: 560px; margin: 0 auto; position: relative; }
-  .header-branding { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-  .header-branding img { height: 24px; }
+  .header-branding { display: flex; align-items: center; gap: 24px; flex-shrink: 0; }
+  .header-branding img { height: 30px; }
   .search-results { position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-card);
     border: 1px solid var(--border); border-radius: var(--radius); margin-top: 4px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.08); z-index: 200; max-height: 400px; overflow-y: auto; }

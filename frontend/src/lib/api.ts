@@ -1,16 +1,33 @@
 import type { GlobalData, Interpretation, SearchResult, UmapData, Variant } from './types';
 
+const API_BASE = (window as any).__APP_CONFIG__?.API_BASE || '';
+
 export async function getGlobal(): Promise<GlobalData> {
+  if (API_BASE) {
+    const [heads, distributions] = await Promise.all([
+      fetch('/heads.json').then(r => r.json()),
+      fetch('/statistics.json').then(r => r.json()),
+    ]);
+    return { heads, distributions };
+  }
   return (await fetch('/api/global')).json();
 }
 
 export async function getUmap(): Promise<UmapData | null> {
+  if (API_BASE) {
+    const resp = await fetch('/umap.json');
+    return resp.ok ? resp.json() : null;
+  }
   const resp = await fetch('/api/umap');
   return resp.ok ? resp.json() : null;
 }
 
+function apiUrl(path: string): string {
+  return API_BASE ? `${API_BASE}${path}` : `/api${path}`;
+}
+
 export async function getVariant(id: string): Promise<Variant> {
-  const resp = await fetch(`/api/variants/${encodeURIComponent(id)}`);
+  const resp = await fetch(apiUrl(`/variants/${encodeURIComponent(id)}`));
   if (!resp.ok) throw new Error(`Variant not found: ${id}`);
   return normalizeVariant(await resp.json());
 }
@@ -18,7 +35,7 @@ export async function getVariant(id: string): Promise<Variant> {
 export async function search(query: string): Promise<SearchResult[]> {
   const q = query.trim();
   if (q.length < 2) return [];
-  const resp = await fetch(`/api/variants/search?q=${encodeURIComponent(q)}`);
+  const resp = await fetch(apiUrl(`/variants/search?q=${encodeURIComponent(q)}`));
   return resp.ok ? resp.json() : [];
 }
 
@@ -29,7 +46,9 @@ export function fetchInterpretation(
   onLoading: () => void,
   onError: () => void,
 ): void {
-  const url = `/api/interpret/${encodeURIComponent(variantId)}`;
+  const url = API_BASE
+    ? `${API_BASE}/variants/${encodeURIComponent(variantId)}/analysis`
+    : `/api/interpret/${encodeURIComponent(variantId)}`;
   onLoading();
   let attempt = 0;
   function poll() {
@@ -40,9 +59,13 @@ export function fetchInterpretation(
         if (signal.aborted) return;
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json().then((data: any) => {
+          // Dev server returns {status: "ok", ...} directly.
+          // Lambda returns {status: "complete", result: {status: "ok", ...}}.
           if (data?.status === 'ok') onResult(data);
-          else if (data?.status === 'processing' && attempt < 20) {
-            setTimeout(poll, Math.min(2000 * 1.5 ** (attempt - 1), 30000));
+          else if (data?.status === 'complete' && data.result) onResult(data.result);
+          else if (data?.status === 'processing' || data?.status === 'queued') {
+            if (attempt < 20) setTimeout(poll, Math.min(2000 * 1.5 ** (attempt - 1), 30000));
+            else onError();
           } else onError();
         });
       })

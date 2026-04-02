@@ -50,9 +50,15 @@
         formatter: (ps: any) => {
           const idx = ps[0]?.dataIndex;
           if (idx == null) return '';
-          const pct = Math.round((lo + (idx + 0.5) * step) * 100);
-          return `${headName}: ${pct}%<br>` +
-            ps.map((p: any) => `${p.seriesName}: ${p.value}`).join('<br>');
+          const loEdge = Math.round((lo + idx * step) * 100);
+          const hiEdge = Math.round((lo + (idx + 1) * step) * 100);
+          const b = benign[idx] || 0;
+          const p = pathogenic[idx] || 0;
+          const bCount = Math.round(b * histogram._bTotal);
+          const pCount = Math.round(p * histogram._pTotal);
+          const total = bCount + pCount;
+          const pctPath = total > 0 ? ((pCount / total) * 100).toFixed(0) : '\u2014';
+          return `Score: ${loEdge}\u2013${hiEdge}%<br>Benign: ${bCount}<br>Pathogenic: ${pCount}<br>% Pathogenic: ${pctPath}%`;
         },
       },
       xAxis: {
@@ -81,7 +87,7 @@
           markLine: {
             silent: true,
             symbol: 'none',
-            lineStyle: { color: '#333', width: 2, type: 'solid' },
+            lineStyle: { color: '#333', width: 2, type: 'dashed' },
             label: {
               show: true,
               formatter: 'this variant',

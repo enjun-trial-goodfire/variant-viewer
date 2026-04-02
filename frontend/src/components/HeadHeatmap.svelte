@@ -130,11 +130,11 @@
         seriesIndex: [0],
       },
       series: [
-        // Sized squares: pct → color (via visualMap), count → size
+        // Sized circles: pct → color (via visualMap), count → size
         {
           type: 'scatter',
           data: scatterData,
-          symbol: 'rect',
+          symbol: 'circle',
           symbolSize: (val: number[]) => {
             const frac = Math.sqrt(val[3] / maxCount);
             return Math.max(3, maxSymbolPx * frac);
@@ -146,7 +146,7 @@
         {
           type: 'scatter',
           data: [[vRefCenter, vVarCenter]],
-          symbol: 'rect',
+          symbol: 'circle',
           symbolSize: maxSymbolPx * 1.1,
           itemStyle: { color: 'rgba(0,0,0,0.08)', borderColor: '#333', borderWidth: 1.5 },
           z: 1,  // behind the data squares
@@ -170,6 +170,6 @@
 <style>
   .heatmap-container {
     width: 100%;
-    height: 420px;
+    aspect-ratio: 1;
   }
 </style>

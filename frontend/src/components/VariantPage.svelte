@@ -8,7 +8,6 @@
   import EffectsCard from './cards/EffectsCard.svelte';
   import PredictorsCard from './cards/PredictorsCard.svelte';
   import NeighborsCard from './cards/NeighborsCard.svelte';
-  // DistributionCard removed — pathogenicity histogram is now in PredictorsCard
   import PopulationCard from './cards/PopulationCard.svelte';
 
   interface Props { variantId: string; }

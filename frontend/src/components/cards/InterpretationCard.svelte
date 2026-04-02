@@ -41,8 +41,8 @@
     class="interp-card"
   >
     {#snippet legend()}
-      {#if interp}
-        <span class="interp-confidence {confClass}" style="margin-left:auto">{interp.confidence} confidence</span>
+      {#if interp?.confidence === 'low'}
+        <span class="interp-confidence conf-low" style="margin-left:auto">low confidence</span>
       {/if}
     {/snippet}
 

@@ -62,22 +62,10 @@ def handle_get_variant(variant_id):
     if not item:
         return json_response(404, {"error": "Variant not found"})
 
-    # Map variant_id back to id for frontend compatibility
-    item["id"] = item.pop("variant_id")
-
-    # Normalize disruption values: older build.py stores [ref, var] pairs,
-    # current frontend expects delta scalars (var - ref, filtered to abs > 0.01).
-    # Once data is re-ingested from latest build.py, this conversion is a no-op.
-    disruption = item.get("disruption", {})
-    if disruption:
-        sample = next(iter(disruption.values()), None)
-        if isinstance(sample, list):
-            item["disruption"] = {
-                k: round(float(v[1]) - float(v[0]), 4)
-                for k, v in disruption.items()
-                if isinstance(v, list) and len(v) == 2
-                and abs(float(v[1]) - float(v[0])) > 0.01
-            }
+    # DynamoDB GSI aliases: ingest renames gene_name→gene, score_pathogenic→score.
+    # Svelte frontend expects the original names, so add them back.
+    item.setdefault("gene_name", item.get("gene"))
+    item.setdefault("score_pathogenic", item.get("score"))
 
     return json_response(200, item)
 
@@ -143,10 +131,10 @@ def handle_get_analysis(variant_id):
     """
     resp = table.get_item(
         Key={"variant_id": variant_id},
-        ProjectionExpression="processing_status, processed_result, processing_error",
+        ProjectionExpression="variant_id, processing_status, processed_result, processing_error",
     )
     item = resp.get("Item")
-    if not item:
+    if item is None:
         return json_response(404, {"error": "Variant not found"})
 
     status = item.get("processing_status", "not_started")
@@ -164,12 +152,12 @@ def handle_get_analysis(variant_id):
     if not sqs or not SQS_QUEUE_URL:
         return json_response(503, {"error": "Processing not configured"})
 
-    # Atomic conditional update: only transition from not_started/failed → pending
+    # Atomic conditional update: only transition from not_started/failed/missing → pending
     try:
         table.update_item(
             Key={"variant_id": variant_id},
             UpdateExpression="SET processing_status = :pending",
-            ConditionExpression="processing_status IN (:not_started, :failed)",
+            ConditionExpression="attribute_not_exists(processing_status) OR processing_status IN (:not_started, :failed)",
             ExpressionAttributeValues={
                 ":pending": "pending",
                 ":not_started": "not_started",

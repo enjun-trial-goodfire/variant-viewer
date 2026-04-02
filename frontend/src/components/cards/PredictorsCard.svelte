@@ -34,14 +34,18 @@
       if (dbVal == null && probeVal == null) continue;
       const primary = dbVal ?? probeVal;
       const invert = p.invert ?? false;
-      const displayVal = invert ? 1 - primary : primary;
+      const phredMax = p.phredMax;
+      // CADD uses PHRED scoring: convert PHRED/max to percentile
+      const displayVal = phredMax
+        ? 1 - Math.pow(10, -primary * phredMax / 10)
+        : invert ? 1 - primary : primary;
       const damaging = invert ? primary < p.threshold : primary > p.threshold;
       rows.push({
         key,
         name: p.display ?? info.display ?? key,
         rawVal: primary,
         displayVal,
-        color: tierColor(primary, invert),
+        color: tierColor(phredMax ? displayVal : primary, invert && !phredMax),
         damaging,
         isProbe: dbVal == null,
         isEvo2: false,

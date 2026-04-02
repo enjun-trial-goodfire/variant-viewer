@@ -17,28 +17,16 @@
   });
 </script>
 
-<div style="max-width:700px;margin:0 auto 32px;text-align:center">
-  <h2 style="font-size:24px;font-weight:700;margin-bottom:12px">EVEE</h2>
-  <p style="font-size:14px;line-height:1.7;color:var(--text-secondary)">
-    EVEE (Evo Variant Effect Explorer) predicts the clinical significance of over
-    4 million ClinVar variants using covariance probes trained on
-    Evo2, a 7-billion-parameter DNA foundation model.
-    The system achieves 0.97 AUROC on a deconfounded ClinVar benchmark, matching or
-    exceeding CADD and AlphaMissense across all variant types. Each variant card
-    shows probe-derived disruption profiles, predicted clinical scores, nearest
-    neighbor evidence, and AI-generated clinical interpretations.
+<div style="max-width:900px;margin:0 auto 32px;text-align:center">
+  <p style="font-size:15px;line-height:1.7;color:var(--text-secondary)">
+    EVEE (Evo Variant Effect Explorer) provides pathogenicity predictions for all 4.2 million ClinVar variants using a covariance probe trained on embeddings from Evo2, a 7 billion parameter DNA foundation model. The classifier achieves an overall AUROC of 0.997 for identifying benign from pathogenic ClinVar variants, outperforming existing approaches across all variant consequence types. Each variant page shows aggregated metadata, predicted pathogenicity, LLM-synthesized interpretations, annotation disruption profiles, and nearest neighbor evidence.
   </p>
-  <div style="display:flex;align-items:center;justify-content:center;gap:24px;margin-top:16px">
-    <span style="font-size:12px;color:var(--text-muted)">Developed by</span>
-    <img src="/goodfire-color.svg" alt="Goodfire" style="height:20px">
-    <img src="/Mayo_Clinic_Logo_2023.png" alt="Mayo Clinic" style="height:36px">
-  </div>
 </div>
 
 {#if umap}
   <div class="umap-landing">
-    <h2>Variant Embedding Space</h2>
-    <p>30k variants. Click a point to view its card.</p>
+    <h2 style="font-size:22px">Variant Embedding Space</h2>
+    <p style="font-size:14px">30k variants. Click a point to view its card.</p>
     <div style="margin-bottom:10px;display:flex;gap:4px;justify-content:center">
       <button class="umap-toggle" class:active={umapMode === 'predicted'} onclick={() => umapMode = 'predicted'}>Pathogenicity</button>
       <button class="umap-toggle" class:active={umapMode === 'labeled'} onclick={() => umapMode = 'labeled'}>ClinVar label</button>

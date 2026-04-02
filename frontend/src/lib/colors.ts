@@ -24,9 +24,12 @@ export function tierColor(val: number, invert: boolean): string {
   return barColor(invert ? 1 - val : val);
 }
 
-/** Disruption direction color (orange = decreased, green = increased). */
-export function deltaColor(z: number, sign: number): { text: string; bar: string } {
-  if (z < 1) return { text: 'var(--text-muted)', bar: '#ccc' };
-  const color = sign < 0 ? 'var(--decrease)' : 'var(--increase)';
-  return { text: color, bar: color };
+/** Continuous color matching HeadHeatmap colorbar: #2178ab → #66aacc → #bbbbbb → #dd8888 → #cc5555 */
+export function lrColor(lr: number): string {
+  const stops = [[0x21,0x78,0xab],[0x66,0xaa,0xcc],[0xbb,0xbb,0xbb],[0xdd,0x88,0x88],[0xcc,0x55,0x55]];
+  const t = Math.max(0, Math.min(1, lr)) * (stops.length - 1);
+  const i = Math.min(Math.floor(t), stops.length - 2);
+  const f = t - i;
+  const [r,g,b] = stops[i].map((c, j) => Math.round(c + (stops[i+1][j] - c) * f));
+  return `rgb(${r},${g},${b})`;
 }

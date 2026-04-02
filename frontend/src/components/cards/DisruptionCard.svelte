@@ -23,6 +23,9 @@
     return gate * Math.abs(z);
   }
 
+  // Use Ryo's curated group order from heads.json _meta
+  const curatedGroups = $derived(g.heads?._meta?.curated_disruption_groups ?? []);
+
   const topItems = $derived.by(() => {
     return Object.entries(v.disruption ?? {})
       .map(([head, d]) => {
@@ -30,13 +33,16 @@
         const score = gatedScore(delta, d.z);
         return { head, display: headsConfig[head]?.display ?? head, eval: evalStr(head), score, ...d };
       })
-      .filter(d => d.score > 0.3)
+      .filter(d => {
+        if (d.z < 1) return false;
+        const info = headsConfig[d.head];
+        if (!info || info.quality === 'removed') return false;
+        const group = info.group ?? 'Other';
+        return !curatedGroups.length || curatedGroups.includes(group);
+      })
       .sort((a, b) => b.score - a.score)
       .slice(0, 15);
   });
-
-  // Use Ryo's curated group order from heads.json _meta
-  const curatedGroups = $derived(g.heads?._meta?.curated_disruption_groups ?? []);
 
   const allGroups = $derived.by(() => {
     const groups: Record<string, typeof topItems> = {};
@@ -63,19 +69,17 @@
   <!-- Header row: same grid as data rows, legends in bar columns -->
   <div class="header-row">
     <div class="title-cell">
-      <span class="section-title" style="margin:0">Top Disruptions</span>
+      <span class="section-title" style="margin:0">Significant Disruptions</span>
       <button class="help-btn" onclick={() => showHelp = !showHelp}>?</button>
     </div>
-    <!-- title-cell spans cols 1-2, so next child is col 3 (ref/var bars) -->
     <div class="legend-cell">
-      <span class="ll">benign</span>
-      <Swatch color="#27a" label="Benign" /><Swatch color="#6ac" label="Leaning benign" /><Swatch color="#bbb" label="Neutral" /><Swatch color="#d88" label="Leaning pathogenic" /><Swatch color="#c55" label="Pathogenic" />
-      <span class="ll">pathogenic</span>
+      <span class="swatch-inline" style="background:#bbb"></span><span class="ll">ref</span>
+      <span class="swatch-inline" style="background:#999;margin-left:6px"></span><span class="ll">var</span>
     </div>
     <div class="legend-cell">
-      <span class="ll">decrease</span>
-      <Swatch color="var(--decrease)" label="Feature decreased" /><Swatch color="var(--increase)" label="Feature increased" />
-      <span class="ll">increase</span>
+      <span class="ll">benign</span>
+      <Swatch color="#2178ab" label="Benign" /><Swatch color="#bbbbbb" label="Neutral" /><Swatch color="#cc5555" label="Pathogenic" />
+      <span class="ll">pathogenic</span>
     </div>
     <div></div>
   </div>
@@ -86,12 +90,17 @@
     </div>
   </div>
 
-  {#each topItems as item}
-    <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} ref_lr={item.ref_lr} var_lr={item.var_lr} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} />
-  {/each}
+  {#if topItems.length === 0}
+    <div style="padding:12px 0;color:var(--text-muted);font-size:13px">No significant disruption</div>
+  {:else}
+    {#each topItems as item}
+      <DisruptionRow name={item.display} ref={item.ref} var={item.var} z={item.z} ref_lr={item.ref_lr} var_lr={item.var_lr} head={item.head} evalStr={item.eval} description={headsConfig[item.head]?.description} distributions={g.distributions} />
+    {/each}
+  {/if}
 
   {#if showAll}
-    <div class="section-title" style="margin-top:16px">All Disruptions</div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0 12px" />
+    <div class="section-title">All Disruptions</div>
     {#each allGroups as [group, items]}
       <div class="profile-group">
         <div class="profile-group-title">{group}</div>
@@ -109,7 +118,7 @@
 
 <style>
   .disruption-grid {
-    --disruption-grid: minmax(80px, 140px) 55px 1fr 1fr 90px;
+    --disruption-grid: 1fr 1fr 1fr 90px;
   }
 
   .header-row {
@@ -123,7 +132,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    grid-column: 1 / 3;
+    grid-column: 1;
     white-space: nowrap;
     position: relative;
     z-index: 1;
@@ -135,5 +144,6 @@
     gap: 3px;
   }
   .ll { font-size: 9px; color: var(--text-muted); }
+  .swatch-inline { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
 
 </style>

@@ -11,7 +11,6 @@
   const context = $derived(
     [
       v.exon ? `exon ${v.exon}` : '',
-      (v.domains || []).slice(0, 3).map(d => d.name || d.id || '?').join(', '),
       v.loeuf != null ? `LOEUF: ${v.loeuf.toFixed(2)} (${v.loeuf_label})` : '',
     ].filter(Boolean).join(' \u00a0|\u00a0 ')
   );
@@ -72,23 +71,14 @@
         {#each v.acmg || [] as code}
           <span style="font-size:10px;font-weight:600;color:{acmgColor(code)};background:color-mix(in srgb, {acmgColor(code)} 12%, transparent);padding:1px 5px;border-radius:4px">{code}</span>
         {/each}
-        {#if v.disease} · {v.disease}{/if}
-        {#if v.origin} · {v.origin}{/if}
-        · gnomAD AF: <b>{v.gnomad_display}</b>
+      </div>
+      <div class="verdict-meta">
+        {#if v.disease}{v.disease} · {/if}
+        gnomAD AF: <b>{v.gnomad_display || 'not observed'}</b>
         {#if v.gnomad_label}
           <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:var(--bg-track)">{v.gnomad_label}</span>
         {/if}
       </div>
-      {#if reviewParts}
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">{reviewParts}</div>
-      {/if}
-      {#if v.clinical_features?.length}
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
-          {#each v.clinical_features as f}
-            <span style="background:var(--bg-track);padding:1px 6px;border-radius:4px;margin-right:3px">{f}</span>
-          {/each}
-        </div>
-      {/if}
       <div class="verdict-links">
         {#each links as link}
           <a href={link.href} target="_blank" rel="noopener">{link.label}</a>
