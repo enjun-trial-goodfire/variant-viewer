@@ -70,6 +70,35 @@ if shard_files:
 else:
     print('No shard files found (single-GPU run?)')
 
+# Merge token window score shards (from extract_token_windows.py)
+def merge_feather_shards(probe_dir, prefix):
+    shard_files = sorted(probe_dir.glob(f'{prefix}_shard_*.feather'))
+    if not shard_files:
+        return
+    shard_ids = sorted(int(f.stem.split('_')[-1]) for f in shard_files)
+    n_expected = max(shard_ids) + 1
+    missing = set(range(n_expected)) - set(shard_ids)
+    if missing:
+        raise RuntimeError(
+            f'Missing {prefix} shards: {sorted(missing)} (have {len(shard_files)}/{n_expected}). '
+            f'Re-run failed array jobs before finalizing.'
+        )
+    print(f'Merging {len(shard_files)} {prefix} shard files...')
+    df = pl.concat([pl.read_ipc(f) for f in shard_files], how='diagonal')
+    n_unique = df['variant_id'].n_unique()
+    assert n_unique == df.height, (
+        f'Duplicate variant IDs in {prefix}: {df.height} rows, {n_unique} unique'
+    )
+    out_path = probe_dir / f'{prefix}.feather'
+    df.write_ipc(out_path)
+    print(f'  Merged {df.height:,} rows → {out_path}')
+    for f in shard_files:
+        f.unlink()
+    print(f'  Removed {len(shard_files)} shard files')
+
+merge_feather_shards(probe_dir, 'token_scores')
+merge_feather_shards(probe_dir, 'token_window_scores')
+
 # Validate embedding partitions exist for all expected shards
 if shard_files:
     emb_dir = probe_dir / 'embeddings'

@@ -84,7 +84,10 @@ LABEL_DISPLAY = {
 
 def filter_heads(df: pl.DataFrame, included: set[str]) -> pl.DataFrame:
     """Drop head columns not in the included set."""
-    head_prefixes = ("ref_score_", "var_score_", "ref_", "var_", "dist_", "spread_", "eff_")
+    head_prefixes = ("ref_score_", "var_score_", "ref_", "var_", "dist_", "spread_", "eff_",
+                      "w0_ref_", "w0_var_", "w0_delta_",
+                      "w2_ref_", "w2_var_", "w2_delta_",
+                      "w64_ref_", "w64_var_", "w64_delta_")
     keep = []
     for c in df.columns:
         drop = False
@@ -257,6 +260,21 @@ def main(
         n_dropped = n_before - df_scores.height
         if n_dropped:
             logger.info(f"  Dropped {n_dropped:,} variants without token scores")
+
+        # ── Window-mean delta scores (from extract_token_windows.py) ──
+        window_path = LABELED / token_probe / "token_window_scores.feather"
+        if window_path.exists():
+            logger.info(f"Loading token window scores ({token_probe})")
+            df_window = pl.read_ipc(str(window_path))
+            logger.info(f"  {df_window.height:,} rows, {df_window.width} columns")
+            df_scores = df_scores.join(df_window, on="variant_id", how="left")
+            # Fill NaN for variants missing window data
+            w_cols = [c for c in df_scores.columns
+                      if any(c.startswith(f"w{r}_{m}_") for r in (0, 2, 64) for m in ("ref", "var", "delta"))]
+            if w_cols:
+                df_scores = df_scores.with_columns(
+                    *(pl.col(c).fill_null(0.0).fill_nan(0.0) for c in w_cols)
+                )
 
     # ── Rename to canonical convention BEFORE filtering ──────────────
     cfg = json.loads((LABELED / probe / "config.json").read_text())
@@ -481,7 +499,10 @@ def main(
 
     # ── Validate: computed columns must not have null/NaN ──────────────
     # Only gt_ columns (database annotations) are allowed to be null.
-    computed_prefixes = ("ref_", "var_", "z_", "eff_")
+    computed_prefixes = ("ref_", "var_", "z_", "eff_",
+                         "w0_ref_", "w0_var_", "w0_delta_",
+                         "w2_ref_", "w2_var_", "w2_delta_",
+                         "w64_ref_", "w64_var_", "w64_delta_")
     for c in df.columns:
         if not any(c.startswith(p) for p in computed_prefixes):
             continue
