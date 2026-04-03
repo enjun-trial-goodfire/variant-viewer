@@ -17,7 +17,7 @@
 
   const idLine = $derived(
     [
-      `${v.chrom}:${v.vcf_pos} ${v.ref}>${v.alt}`,
+      `${v.chrom}:${v.pos} ${v.ref}>${v.alt}`,
       v.hgvsc_short,
       v.hgvsp_short,
       v.consequence_display,

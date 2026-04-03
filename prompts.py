@@ -116,8 +116,9 @@ def build_prompt(v: dict) -> str:
 
         lines.append(f"### Disruption Profile ({len(filtered)} heads, ranked by |z-score|)")
         lines.append("Features with |z| > 2σ are nominally significant (p < 0.05).")
-        lines.append("| Feature | ref | var | delta | z-score | Database |")
-        lines.append("|---------|-----|-----|-------|---------|----------|")
+        lines.append("The 'Annotated' column is the externally-annotated ground-truth value from the source database (e.g., UniProt, ENCODE), if available.")
+        lines.append("| Feature | ref | var | delta | z-score | Annotated |")
+        lines.append("|---------|-----|-----|-------|---------|-----------|")
         for name, ref_val, var_val, delta, z in filtered:
             ref_str = f"{ref_val:.3f}" if ref_val is not None else ""
             var_str = f"{var_val:.3f}" if var_val is not None else ""
@@ -134,8 +135,8 @@ def build_prompt(v: dict) -> str:
         filtered_eff.sort(key=lambda x: abs(x[1]), reverse=True)
         if filtered_eff:
             lines.append(f"### Effect Predictions ({len(filtered_eff)} heads, ranked by |score|)")
-            lines.append("| Feature | score | Database |")
-            lines.append("|---------|-------|----------|")
+            lines.append("| Feature | score | Annotated |")
+            lines.append("|---------|-------|-----------|")
             for name, val in filtered_eff:
                 gt_val = gt.get(name)
                 gt_str = f"{gt_val:.3f}" if isinstance(gt_val, (int, float)) else ""

@@ -55,7 +55,7 @@
       bind:value={query}
       oninput={onInput}
       onkeydown={onKeydown}
-      placeholder="Search gene or variant (BRCA1, chr17:43093110:C:T)"
+      placeholder="Search gene, rsID, or ClinVar ID (BRCA1, rs80357906, 15126)"
       autocomplete="off"
     />
     {#if showResults}
@@ -66,6 +66,7 @@
           {#each results as r}
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div class="search-item" role="button" tabindex="0" onclick={() => { showResults = false; navigate(`variant/${r.v}`); }}>
+              <span class="gene">{r.g}</span>
               <span class="vid" title={r.v}>{truncate(r.v)}</span>
               <span class="meta">{r.c} · {r.l}</span>
             </div>
@@ -106,6 +107,7 @@
   .search-item { padding: 8px 14px; cursor: pointer; display: flex; justify-content: space-between;
     align-items: center; transition: background 0.1s; }
   .search-item:hover { background: var(--bg-hover); }
-  .search-item .vid { font-family: monospace; font-size: 12px; }
-  .search-item .meta { font-size: 11px; color: var(--text-muted); }
+  .search-item .gene { font-size: 12px; font-weight: 600; min-width: 60px; }
+  .search-item .vid { font-family: monospace; font-size: 11px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .search-item .meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 </style>

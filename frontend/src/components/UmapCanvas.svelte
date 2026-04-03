@@ -6,7 +6,7 @@
 
   interface Props {
     data: UmapData;
-    mode: 'predicted' | 'labeled';
+    mode: 'predicted' | 'labeled' | 'vus_extreme';
   }
 
   let { data, mode }: Props = $props();
@@ -56,19 +56,40 @@
 
     ctx.fillStyle = '#faf8f5';
     ctx.fillRect(0, 0, W, H);
-    const colors = getColors(data, mode);
+    const colors = getColors(data, mode === 'vus_extreme' ? 'predicted' : mode);
     const order = Array.from({ length: n }, (_, i) => i);
     for (let i = n - 1; i > 0; i--) {
       const j = Math.random() * (i + 1) | 0;
       [order[i], order[j]] = [order[j], order[i]];
     }
-    for (const i of order) {
-      const c = colors[i];
-      const alpha = (mode === 'labeled' && labelStr[i] === 'VUS') ? .35 : .7;
-      ctx.fillStyle = `rgba(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0},${alpha})`;
-      ctx.beginPath();
-      ctx.arc(px[i], py[i], 2.2, 0, Math.PI * 2);
-      ctx.fill();
+
+    if (mode === 'vus_extreme') {
+      // First pass: draw all points as faint grey for spatial context
+      for (const i of order) {
+        ctx.fillStyle = 'rgba(200,200,200,0.15)';
+        ctx.beginPath();
+        ctx.arc(px[i], py[i], 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Second pass: draw VUS with extreme scores on top
+      for (const i of order) {
+        if (labels[i] !== 2) continue; // VUS only
+        if (score[i] > 0.2 && score[i] < 0.8) continue; // skip non-extreme
+        const c = colors[i];
+        ctx.fillStyle = `rgba(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0},0.9)`;
+        ctx.beginPath();
+        ctx.arc(px[i], py[i], 3.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      for (const i of order) {
+        const c = colors[i];
+        const alpha = (mode === 'labeled' && labelStr[i] === 'VUS') ? .35 : .7;
+        ctx.fillStyle = `rgba(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0},${alpha})`;
+        ctx.beginPath();
+        ctx.arc(px[i], py[i], 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     const tooltip = document.getElementById('umap-tooltip')!;
@@ -79,6 +100,8 @@
       const my = (e.clientY - cr.top) * (H / cr.height);
       let best = -1, bestD = 12;
       for (let i = 0; i < n; i++) {
+        // In VUS extreme mode, only interact with extreme VUS points
+        if (mode === 'vus_extreme' && (labels[i] !== 2 || (score[i] > 0.2 && score[i] < 0.8))) continue;
         const d = Math.hypot(mx - px[i], my - py[i]);
         if (d < bestD) { bestD = d; best = i; }
       }

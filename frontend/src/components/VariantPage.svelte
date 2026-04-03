@@ -8,8 +8,6 @@
   import EffectsCard from './cards/EffectsCard.svelte';
   import PredictorsCard from './cards/PredictorsCard.svelte';
   import NeighborsCard from './cards/NeighborsCard.svelte';
-  import PopulationCard from './cards/PopulationCard.svelte';
-
   interface Props { variantId: string; }
   let { variantId }: Props = $props();
 
@@ -29,9 +27,6 @@
 
   $effect(() => { load(variantId); });
 
-  const hasPopulation = $derived(
-    variant?.gnomad_pop && Object.values(variant.gnomad_pop).some(f => f > 0)
-  );
 </script>
 
 {#if error}
@@ -51,8 +46,5 @@
   <PredictorsCard {variant} global={$globalData} />
   {#if variant.neighbors?.length}
     <NeighborsCard {variant} />
-  {/if}
-  {#if hasPopulation}
-    <PopulationCard {variant} />
   {/if}
 {/if}

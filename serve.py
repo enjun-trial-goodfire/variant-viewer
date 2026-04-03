@@ -116,29 +116,55 @@ async def variant_endpoint(request):
 
 
 async def search_endpoint(request):
-    """GET /api/variants/search?q=... — gene prefix search."""
-    q = request.query_params.get("q", "").strip().upper()
+    """GET /api/variants/search?q=... — search by gene name, rsID, or ClinVar allele ID."""
+    q = request.query_params.get("q", "").strip()
     if len(q) < 2:
         return JSONResponse([])
 
     cur = request.app.state.db.cursor()
+    _COLS = "variant_id, label_display, pathogenicity, consequence_display, gene_name"
+
+    # rsID lookup (e.g. "rs1234")
+    if q.lower().startswith("rs") and q[2:].isdigit():
+        results = cur.execute(
+            f"SELECT {_COLS} FROM variants WHERE rs_id = ? ORDER BY pathogenicity DESC LIMIT 30",
+            [q.lower()],
+        ).fetchall()
+        return JSONResponse([
+            {"v": r[0], "l": r[1], "s": r[2], "c": r[3], "g": r[4]} for r in results
+        ])
+
+    # Numeric: ClinVar allele ID or variation ID
+    if q.isdigit():
+        qn = int(q)
+        results = cur.execute(
+            f"SELECT {_COLS} FROM variants WHERE allele_id = ? OR variation_id = ? "
+            "ORDER BY pathogenicity DESC LIMIT 30",
+            [qn, q],
+        ).fetchall()
+        return JSONResponse([
+            {"v": r[0], "l": r[1], "s": r[2], "c": r[3], "g": r[4]} for r in results
+        ])
+
+    # Gene name search (exact + prefix)
+    qu = q.upper()
     results = cur.execute(
-        "SELECT variant_id, label_display, pathogenicity, consequence_display FROM variants "
+        f"SELECT {_COLS} FROM variants "
         "WHERE upper(gene_name) = ? ORDER BY pathogenicity DESC LIMIT 30",
-        [q],
+        [qu],
     ).fetchall()
 
     if len(results) < 30:
         more = cur.execute(
-            "SELECT variant_id, label_display, pathogenicity, consequence_display FROM variants "
+            f"SELECT {_COLS} FROM variants "
             "WHERE upper(gene_name) LIKE ? AND upper(gene_name) != ? "
             "ORDER BY pathogenicity DESC LIMIT ?",
-            [f"{q}%", q, 30 - len(results)],
+            [f"{qu}%", qu, 30 - len(results)],
         ).fetchall()
         results.extend(more)
 
     return JSONResponse([
-        {"v": r[0], "l": r[1], "s": r[2], "c": r[3]} for r in results
+        {"v": r[0], "l": r[1], "s": r[2], "c": r[3], "g": r[4]} for r in results
     ])
 
 

@@ -87,6 +87,7 @@ export interface SearchResult {
   l: string;
   s: number;
   c: string;
+  g: string;
 }
 
 export interface DistributionData {

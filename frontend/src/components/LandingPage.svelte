@@ -6,7 +6,7 @@
   import type { UmapData } from '../lib/types';
 
   let umap = $state<UmapData | null>(null);
-  let umapMode = $state<'predicted' | 'labeled'>('predicted');
+  let umapMode = $state<'predicted' | 'labeled' | 'vus_extreme'>('predicted');
 
   onMount(async () => {
     const data = await getUmap();
@@ -30,15 +30,19 @@
     <div style="margin-bottom:10px;display:flex;gap:4px;justify-content:center">
       <button class="umap-toggle" class:active={umapMode === 'predicted'} onclick={() => umapMode = 'predicted'}>Pathogenicity</button>
       <button class="umap-toggle" class:active={umapMode === 'labeled'} onclick={() => umapMode = 'labeled'}>ClinVar label</button>
+      <button class="umap-toggle" class:active={umapMode === 'vus_extreme'} onclick={() => umapMode = 'vus_extreme'}>VUS extremes</button>
     </div>
     <UmapCanvas data={umap} mode={umapMode} />
     <div style="margin-top:10px;font-size:11px;color:var(--text-muted);display:flex;gap:12px;justify-content:center;align-items:center">
-      {#if umapMode === 'predicted'}
+      {#if umapMode === 'predicted' || umapMode === 'vus_extreme'}
         <span style="display:inline-flex;align-items:center;gap:6px">
           <span style="font-size:10px">0%</span>
           <span style="display:inline-block;width:120px;height:10px;border-radius:3px;background:linear-gradient(to right, rgb(33,120,171), #bbb 50%, rgb(204,85,85))"></span>
           <span style="font-size:10px">100%</span>
         </span>
+        {#if umapMode === 'vus_extreme'}
+          <span style="color:var(--text-muted)">VUS only, score &lt;20% or &gt;80%</span>
+        {/if}
       {:else}
         {#each [['pathogenic','#c55'],['likely path.','#d88'],['VUS','#a1a1a1'],['likely benign','#6ac'],['benign','#2178ab']] as [name, color]}
           <span style="display:inline-flex;align-items:center;gap:3px">
