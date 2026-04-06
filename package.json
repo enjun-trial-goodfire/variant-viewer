@@ -1,0 +1,11 @@
+{
+  "name": "variant-viewer",
+  "private": true,
+  "description": "EVEE repo root — the Svelte/Vite app is in frontend/ (see frontend/package.json). Run bun/npm there.",
+  "scripts": {
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "check": "npm run check --prefix frontend",
+    "preview": "npm run preview --prefix frontend"
+  }
+}
