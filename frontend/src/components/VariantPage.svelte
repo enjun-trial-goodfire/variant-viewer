@@ -4,6 +4,7 @@
   import type { Variant } from '../lib/types';
   import VerdictCard from './cards/VerdictCard.svelte';
   import UCSCGenomeContextCard from './cards/UCSCGenomeContextCard.svelte';
+  import SequenceStripContextCard from './cards/SequenceStripContextCard.svelte';
   import InterpretationCard from './cards/InterpretationCard.svelte';
   import DisruptionCard from './cards/DisruptionCard.svelte';
   import EffectsCard from './cards/EffectsCard.svelte';
@@ -38,6 +39,7 @@
 {:else if variant && $globalData}
   <VerdictCard {variant} global={$globalData} />
   <UCSCGenomeContextCard variant={variant} />
+  <SequenceStripContextCard variant={variant} />
   <InterpretationCard variantId={variant.variant_id} />
   {#if Object.keys(variant.disruption ?? {}).length}
     <DisruptionCard {variant} global={$globalData} />

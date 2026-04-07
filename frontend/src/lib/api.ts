@@ -1,3 +1,4 @@
+import type { NearbyVariantPoint } from './locusTrackModel';
 import type { GlobalData, HeadConfig, Interpretation, SearchResult, UmapData, Variant } from './types';
 
 declare global {
@@ -48,6 +49,50 @@ export async function search(query: string): Promise<SearchResult[]> {
   if (q.length < 2) return [];
   const resp = await fetch(api(`/variants/search?q=${encodeURIComponent(q)}`));
   return resp.ok ? resp.json() : [];
+}
+
+/**
+ * Nearest variants in the served DuckDB subset: same chrom, vcf_pos within ±pad of focal, excluding focal id.
+ * Sorted by |Δbp|, limit 10 by default.
+ *
+ * `interactionTerm` in each row is pathogenicity clamped to [0, 1] until a dedicated field exists (marker color only).
+ */
+export async function fetchNearbyLocusVariants(
+  chrom: string,
+  vcfPos: number,
+  excludeVariantId: string,
+  opts?: { pad?: number; limit?: number; signal?: AbortSignal },
+): Promise<NearbyVariantPoint[]> {
+  const pad = opts?.pad ?? 3000;
+  const limit = opts?.limit ?? 10;
+  const params = new URLSearchParams({
+    chrom,
+    pos: String(vcfPos),
+    exclude: excludeVariantId,
+    pad: String(pad),
+    limit: String(limit),
+  });
+  try {
+    const resp = await fetch(api(`/variants/nearby-locus?${params}`), { signal: opts?.signal });
+    if (!resp.ok) return [];
+    const data: unknown = await resp.json();
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((row: Record<string, unknown>): NearbyVariantPoint | null => {
+        const variantId = row.variantId != null ? String(row.variantId) : '';
+        const genomicPos = Number(row.genomicPos);
+        const it = row.interactionTerm;
+        const interactionTerm =
+          typeof it === 'number' && Number.isFinite(it) ? it : 0.5;
+        const labelDisplay =
+          typeof row.labelDisplay === 'string' && row.labelDisplay ? row.labelDisplay : undefined;
+        if (!variantId || !Number.isFinite(genomicPos)) return null;
+        return { variantId, genomicPos, interactionTerm, labelDisplay };
+      })
+      .filter((r): r is NearbyVariantPoint => r != null);
+  } catch {
+    return [];
+  }
 }
 
 export function fetchInterpretation(

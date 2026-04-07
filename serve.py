@@ -115,6 +115,60 @@ async def variant_endpoint(request):
     return JSONResponse(dict(zip(columns, row)))
 
 
+async def nearby_locus_endpoint(request):
+    """GET /api/variants/nearby-locus — variants in the served subset on the same chrom, within ±pad bp.
+
+    Query: chrom, pos (vcf 1-based), exclude (focal variant_id), pad=3000, limit=10
+    Ordered by |vcf_pos - pos|, nearest first. Excludes the focal row.
+
+    interactionTerm is a placeholder: pathogenicity clamped to [0, 1] until a dedicated field exists.
+    """
+    chrom = request.query_params.get("chrom", "").strip()
+    pos_s = request.query_params.get("pos", "").strip()
+    exclude = request.query_params.get("exclude", "").strip()
+    try:
+        pad = int(request.query_params.get("pad", "3000"))
+        limit = int(request.query_params.get("limit", "10"))
+    except ValueError:
+        return JSONResponse({"error": "invalid pad or limit"}, status_code=400)
+    pad = max(1, min(pad, 500_000))
+    limit = max(1, min(limit, 50))
+    if not chrom or not pos_s.isdigit():
+        return JSONResponse({"error": "chrom and pos are required"}, status_code=400)
+    pos = int(pos_s)
+    lo, hi = pos - pad, pos + pad
+
+    cur = request.app.state.db.cursor()
+    rows = cur.execute(
+        """
+        SELECT variant_id, vcf_pos, pathogenicity, label_display
+        FROM variants
+        WHERE chrom = ?
+          AND vcf_pos BETWEEN ? AND ?
+          AND variant_id <> ?
+        ORDER BY abs(vcf_pos - ?)
+        LIMIT ?
+        """,
+        [chrom, lo, hi, exclude, pos, limit],
+    ).fetchall()
+
+    out: list[dict] = []
+    for vid, vcf_p, path, lbl in rows:
+        if path is None:
+            t = 0.5
+        else:
+            t = max(0.0, min(1.0, float(path)))
+        item = {
+            "variantId": vid,
+            "genomicPos": int(vcf_p),
+            "interactionTerm": t,
+        }
+        if lbl:
+            item["labelDisplay"] = lbl
+        out.append(item)
+    return JSONResponse(out)
+
+
 async def search_endpoint(request):
     """GET /api/variants/search?q=... — search by gene name, rsID, or ClinVar allele ID."""
     q = request.query_params.get("q", "").strip()
@@ -289,6 +343,7 @@ def create_app(db_path: Path, static_dir: Path | None = None) -> Starlette:
     routes = [
         Route("/api/global", global_endpoint),
         Route("/api/umap", umap_endpoint),
+        Route("/api/variants/nearby-locus", nearby_locus_endpoint),
         Route("/api/variants/search", search_endpoint),
         Route("/api/variants/{variant_id:path}/analysis", interpret_endpoint),
         Route("/api/variants/{variant_id:path}", variant_endpoint),
