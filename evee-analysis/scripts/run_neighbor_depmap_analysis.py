@@ -413,8 +413,8 @@ def consequence_summary(result_df: pl.DataFrame) -> pl.DataFrame:
         rd = sub.filter((pl.col("pair_type") == "random_cross_gene") & pl.col("profile_corr").is_not_null())
         nb_mean = nb["profile_corr"].mean() if nb.height > 0 else None
         rd_mean = rd["profile_corr"].mean() if rd.height > 0 else None
-        delta = (nb_mean - rd_mean) if nb_mean is not None and rd_mean is not None else None
         ci_lo, ci_mid, ci_hi = bootstrap_delta_by_gene(sub) if nb.height > 100 and rd.height > 100 else (None, None, None)
+        delta = ci_mid if ci_mid is not None else ((nb_mean - rd_mean) if nb_mean is not None and rd_mean is not None else None)
         n_src = sub.filter(pl.col("pair_type") == "neighbor_cross_gene")["source_variant_id"].n_unique() if nb.height > 0 else 0
         rows.append({
             "reported_bin": reported_bin,
@@ -580,9 +580,10 @@ def write_readme(
 
     nb_mean = nb_cross["profile_corr"].mean()
     rd_mean = rd_cross["profile_corr"].mean()
-    delta = nb_mean - rd_mean if nb_mean is not None and rd_mean is not None else None
+    pair_delta = nb_mean - rd_mean if nb_mean is not None and rd_mean is not None else None
 
     ci_lo, ci_mid, ci_hi = bootstrap_delta_by_gene(result_df)
+    delta = ci_mid  # gene-level mean matches the gene-level bootstrap CI
 
     all_pairs = result_df.filter(pl.col("pair_type").str.starts_with("neighbor"))
     n_same = all_pairs.filter(pl.col("is_same_gene")).height
@@ -864,9 +865,10 @@ def main() -> None:
     print(f"  Same-gene neighbor pairs: {n_same_total:,}")
     print(f"  Cross-gene neighbor pairs:{n_cross_total:,}")
     print(f"  Fraction cross-gene:      {n_cross_total / (n_same_total + n_cross_total):.3f}" if (n_same_total + n_cross_total) > 0 else "")
-    print(f"  All-coding effect size:   delta = {nb_mean - rd_mean:.4f}")
-    boot_result = bootstrap_delta_by_gene(result_df)
-    print(f"  Bootstrap 95% CI:         [{boot_result[0]:.4f}, {boot_result[2]:.4f}]")
+    boot_lo, boot_mid, boot_hi = bootstrap_delta_by_gene(result_df)
+    print(f"  All-coding effect size:   delta = {boot_mid:.4f} (gene-level mean)")
+    print(f"  Bootstrap 95% CI:         [{boot_lo:.4f}, {boot_hi:.4f}]")
+    print(f"  Pair-level delta:         {nb_mean - rd_mean:.4f} (for reference; not used with gene-level CI)")
     print("\n  Consequence-bin effect sizes:")
     for row in csq_summary.iter_rows(named=True):
         d = f"{row['delta']:.4f}" if row["delta"] is not None else "N/A"

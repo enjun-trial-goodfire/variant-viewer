@@ -71,7 +71,7 @@ def load_string_pairs() -> dict[tuple[str, str], int]:
         str(STRING_INFO), separator="\t", comment_prefix="#", has_header=False,
         new_columns=["string_protein_id", "preferred_name", "protein_size", "annotation"],
     ).select("string_protein_id", "preferred_name")
-    prot_to_gene = dict(zip(info["string_protein_id"].to_list(), info["preferred_name"].to_list()))
+    prot_to_gene = {k: v.upper() for k, v in zip(info["string_protein_id"].to_list(), info["preferred_name"].to_list())}
 
     log.info("  Loading STRING links...")
     links = pl.read_csv(str(STRING_LINKS), separator=" ")

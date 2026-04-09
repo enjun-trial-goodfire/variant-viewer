@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -27,6 +28,8 @@ import numpy as np
 import polars as pl
 import torch
 from safetensors.torch import load_file as safetensors_load
+
+from reproducibility import enforce_seeds
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -400,11 +403,21 @@ def load_chronos_profiles() -> dict[str, np.ndarray]:
 
 def main() -> None:
     t0 = time.time()
-    random.seed(RANDOM_SEED)
-    np.random.seed(RANDOM_SEED)
-    os.environ["PYTHONHASHSEED"] = str(RANDOM_SEED)
+    enforce_seeds(RANDOM_SEED)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    cfg = {
+        "random_seed": RANDOM_SEED,
+        "k_values": K_VALUES,
+        "corr_thresholds": CORR_THRESHOLDS,
+        "min_overlap": MIN_OVERLAP,
+        "command": " ".join(sys.argv),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    cfg_path = OUT_DIR / "followup_run_config.json"
+    cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True, default=str))
+    log.info(f"  Saved {cfg_path.name}")
 
     datasets = {
         "DEMETER2": {

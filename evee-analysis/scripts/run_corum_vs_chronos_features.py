@@ -326,12 +326,18 @@ def stage_x5(class_df: pl.DataFrame) -> pl.DataFrame:
         row_obs = np.zeros(64)
         for r in row_counts.iter_rows(named=True):
             row_obs[r["i"]] = r["count"]
-        chi2_row, p_row = stats.chisquare(row_obs + 0.5)  # +0.5 to avoid zeros
+        if (row_obs == 0).sum() > len(row_obs) // 2:
+            chi2_row, p_row = float("nan"), float("nan")
+        else:
+            chi2_row, p_row = stats.chisquare(row_obs[row_obs > 0])
 
         col_obs = np.zeros(64)
         for r in col_counts.iter_rows(named=True):
             col_obs[r["j"]] = r["count"]
-        chi2_col, p_col = stats.chisquare(col_obs + 0.5)
+        if (col_obs == 0).sum() > len(col_obs) // 2:
+            chi2_col, p_col = float("nan"), float("nan")
+        else:
+            chi2_col, p_col = stats.chisquare(col_obs[col_obs > 0])
 
         log.info(f"  {cls}: rows chi²={chi2_row:.1f} (p={p_row:.3g}), "
                  f"cols chi²={chi2_col:.1f} (p={p_col:.3g})")

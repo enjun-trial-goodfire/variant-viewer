@@ -467,8 +467,10 @@ def write_markdown_report(
         "decreases proportionally.",
         "",
         f"4. **This is an extremely imbalanced task** ({base_rate:.2%} positive rate). "
-        "The enrichment signal (2–3× across CORUM and STRING validations) is the key finding; "
-        "raw precision/recall numbers should be interpreted in context of the class imbalance.",
+        f"The precision lift over base rate (~{results[0]['micro_precision']/base_rate:.1f}× at k=5) "
+        "is the key finding; raw precision/recall numbers should be interpreted in context of the "
+        "class imbalance. Note: the higher fold-enrichment figures (2–3×) come from the co-membership "
+        "enrichment analysis (`run_corum_full.py`), which measures a different quantity.",
         "",
         "## Figures",
         "",

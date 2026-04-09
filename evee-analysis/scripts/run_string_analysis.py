@@ -87,9 +87,10 @@ def load_string() -> tuple[dict[tuple[str, str], tuple[int, int, int]], set[str]
         str(STRING_INFO), separator="\t", comment_prefix="#", has_header=False,
         new_columns=["string_protein_id", "preferred_name", "protein_size", "annotation"],
     ).select("string_protein_id", "preferred_name")
-    prot_to_gene: dict[str, str] = dict(
-        zip(info["string_protein_id"].to_list(), info["preferred_name"].to_list())
-    )
+    prot_to_gene: dict[str, str] = {
+        k: v.upper()
+        for k, v in zip(info["string_protein_id"].to_list(), info["preferred_name"].to_list())
+    }
     string_genes = set(prot_to_gene.values())
     log.info(f"    {len(prot_to_gene):,} proteins → {len(string_genes):,} unique genes")
 

@@ -417,8 +417,8 @@ def consequence_summary(result_df: pl.DataFrame) -> pl.DataFrame:
         rd = sub.filter((pl.col("pair_type") == "random_cross_gene") & pl.col("profile_corr").is_not_null())
         nb_mean = nb["profile_corr"].mean() if nb.height > 0 else None
         rd_mean = rd["profile_corr"].mean() if rd.height > 0 else None
-        delta = (nb_mean - rd_mean) if nb_mean is not None and rd_mean is not None else None
         ci_lo, ci_mid, ci_hi = bootstrap_delta_by_gene(sub) if nb.height > 100 and rd.height > 100 else (None, None, None)
+        delta = ci_mid if ci_mid is not None else ((nb_mean - rd_mean) if nb_mean is not None and rd_mean is not None else None)
         n_src = sub.filter(pl.col("pair_type") == "neighbor_cross_gene")["source_variant_id"].n_unique() if nb.height > 0 else 0
         rows.append({
             "reported_bin": reported_bin,
@@ -578,9 +578,10 @@ def write_readme(
 
     nb_mean = nb_cross["profile_corr"].mean()
     rd_mean = rd_cross["profile_corr"].mean()
-    delta = nb_mean - rd_mean if nb_mean is not None and rd_mean is not None else None
+    pair_delta = nb_mean - rd_mean if nb_mean is not None and rd_mean is not None else None
 
     ci_lo, ci_mid, ci_hi = bootstrap_delta_by_gene(result_df)
+    delta = ci_mid  # gene-level mean matches the gene-level bootstrap CI
 
     all_pairs = result_df.filter(pl.col("pair_type").str.starts_with("neighbor"))
     n_same = all_pairs.filter(pl.col("is_same_gene")).height
