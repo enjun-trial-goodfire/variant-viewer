@@ -383,6 +383,103 @@ def plot_retrieval_curves(results: list[dict]) -> None:
     log.info("  Saved fig_corum_retrieval_vs_k.png")
 
 
+# ── Markdown report ───────────────────────────────────────────────────
+
+def write_markdown_report(
+    results: list[dict],
+    n_complexes: int,
+    n_corum_genes: int,
+    n_positive_total: int,
+) -> None:
+    md_path = OUT_DIR / "corum_retrieval_report.md"
+    n_genes_univ = results[0]["n_genes_in_universe"]
+    n_pos_univ = results[0]["n_positive_pairs_in_universe"]
+    n_possible = n_genes_univ * (n_genes_univ - 1) // 2
+    base_rate = n_pos_univ / n_possible if n_possible > 0 else 0
+
+    lines = [
+        "# CORUM Co-Complex Binary Retrieval — Embedding Neighbors",
+        "",
+        "## Setup",
+        "",
+        f"- **CORUM complexes:** {n_complexes:,} (filtered to ≥ 3 genes)",
+        f"- **CORUM genes (total):** {n_corum_genes:,}",
+        f"- **CORUM positive pairs (total):** {n_positive_total:,}",
+        f"- **Genes in evaluation universe (kNN graph ∩ CORUM):** {n_genes_univ:,}",
+        f"- **Positive pairs in universe:** {n_pos_univ:,}",
+        f"- **Total possible pairs:** {n_possible:,}",
+        f"- **Base rate (positive / total):** {base_rate:.4%}",
+        "",
+        "**Definitions:**",
+        "- Pairs are undirected and deduplicated at gene level",
+        "- Self-pairs (same gene) are excluded",
+        "- True positive: gene pair sharing ≥ 1 CORUM complex",
+        "- Predicted positive: gene pair connected by ≥ 1 top-k embedding neighbor edge",
+        "- Gene symbols normalized to uppercase; exact match only",
+        f"- Bootstrap: {N_BOOTSTRAP:,} iterations, resampling source genes",
+        "",
+        "## Global (Micro) Retrieval Metrics",
+        "",
+        "| k | Predicted | TP | FP | FN | Precision | 95% CI | Recall | 95% CI | F1 | 95% CI |",
+        "|---|----------|-----|------|------|-----------|--------|--------|--------|-----|--------|",
+    ]
+
+    for r in results:
+        lines.append(
+            f"| {r['k']} | {r['n_predicted_pairs']:,} | {r['TP']:,} | {r['FP']:,} | {r['FN']:,} "
+            f"| {r['micro_precision']:.4f} | [{r['micro_precision_ci_lo']:.4f}, {r['micro_precision_ci_hi']:.4f}] "
+            f"| {r['micro_recall']:.4f} | [{r['micro_recall_ci_lo']:.4f}, {r['micro_recall_ci_hi']:.4f}] "
+            f"| {r['micro_f1']:.4f} | [{r['micro_f1_ci_lo']:.4f}, {r['micro_f1_ci_hi']:.4f}] |"
+        )
+
+    lines += [
+        "",
+        "## Per-Gene (Macro) Retrieval Metrics",
+        "",
+        "| k | Precision@k | 95% CI | Recall@k | 95% CI | F1@k |",
+        "|---|------------|--------|----------|--------|------|",
+    ]
+
+    for r in results:
+        lines.append(
+            f"| {r['k']} | {r['macro_precision_at_k']:.4f} "
+            f"| [{r['macro_precision_ci_lo']:.4f}, {r['macro_precision_ci_hi']:.4f}] "
+            f"| {r['macro_recall_at_k']:.4f} "
+            f"| [{r['macro_recall_ci_lo']:.4f}, {r['macro_recall_ci_hi']:.4f}] "
+            f"| {r['macro_f1_at_k']:.4f} |"
+        )
+
+    lines += [
+        "",
+        "## Interpretation",
+        "",
+        f"1. **Precision is low but above base rate.** At k=5, micro precision is "
+        f"{results[0]['micro_precision']:.4f} vs a base rate of {base_rate:.4%}. "
+        f"This represents a ~{results[0]['micro_precision']/base_rate:.1f}× lift over random.",
+        "",
+        "2. **Recall scales with k.** From "
+        f"{results[0]['micro_recall']:.2%} at k=5 to {results[-1]['micro_recall']:.2%} at k=50. "
+        f"At k=50, the embedding neighbor graph recovers {results[-1]['TP']:,} of "
+        f"{n_pos_univ:,} true co-complex pairs.",
+        "",
+        f"3. **F1 is stable across k** (~{np.mean([r['micro_f1'] for r in results]):.4f}), "
+        "reflecting the precision–recall tradeoff: as k grows, recall increases but precision "
+        "decreases proportionally.",
+        "",
+        f"4. **This is an extremely imbalanced task** ({base_rate:.2%} positive rate). "
+        "The enrichment signal (2–3× across CORUM and STRING validations) is the key finding; "
+        "raw precision/recall numbers should be interpreted in context of the class imbalance.",
+        "",
+        "## Figures",
+        "",
+        "- `fig_corum_retrieval_vs_k.png` — Precision, recall, F1 vs k (with bootstrap CIs) "
+        "and TP/FP/FN bar chart",
+    ]
+
+    md_path.write_text("\n".join(lines) + "\n")
+    log.info(f"  Saved {md_path.name}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -448,6 +545,9 @@ def main() -> None:
 
     # Plot
     plot_retrieval_curves(results)
+
+    # Markdown report
+    write_markdown_report(results, n_cx, len(corum_genes), len(positive_pairs))
 
     elapsed = time.time() - t0
     log.info(f"DONE in {elapsed:.0f}s")
