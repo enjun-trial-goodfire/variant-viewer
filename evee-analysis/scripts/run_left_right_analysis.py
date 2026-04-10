@@ -10,7 +10,7 @@ Three representations per variant (from the 64x64 covariance matrix M):
   full_4096d = M.flatten()    -> 4096-d,   L2-norm
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_left_right_analysis.py
+    uv run python evee-analysis/scripts/run_left_right_analysis.py
 """
 from __future__ import annotations
 
@@ -42,15 +42,15 @@ log = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
-CORUM_PATH = EEVE_ROOT / "data" / "corum_humanComplexes.json"
-DEMETER2_PATH = EEVE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
-CHRONOS_PATH = EEVE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+CORUM_PATH = EVEE_ROOT / "data" / "corum_humanComplexes.json"
+DEMETER2_PATH = EVEE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
+CHRONOS_PATH = EVEE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 FULL_KNN_CACHE = OUT_DIR / "corum_full_knn_indices.npz"
 

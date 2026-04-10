@@ -331,7 +331,7 @@ def fig4_feature_interpretability() -> None:
     cbar.set_label("# complexes (FDR < 0.05)", fontsize=10)
     ax.set_xlabel("j (right feature)", fontsize=11)
     ax.set_ylabel("i (left feature)", fontsize=11)
-    ax.set_title("(a)  Recurrent features across 271 complexes", fontsize=11, loc="left")
+    ax.set_title("(a)  Recurrent features across 300 complexes", fontsize=11, loc="left")
 
     # Panel (b): Example complex — BAF complex delta heatmap
     baf = top_entries.filter(pl.col("complex_name") == "BAF complex")

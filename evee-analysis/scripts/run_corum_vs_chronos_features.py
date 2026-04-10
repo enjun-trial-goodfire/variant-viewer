@@ -11,7 +11,7 @@ Prereqs (run first):
     run_chronos_entry_analysis.py   → chronos_entry_correlations.parquet, chronos_entry_weights.parquet
 
 Usage:
-    uv run python eeve-analysis/scripts/run_corum_vs_chronos_features.py
+    uv run python evee-analysis/scripts/run_corum_vs_chronos_features.py
 """
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 RANDOM_SEED = 42
 N_PERM = 10_000

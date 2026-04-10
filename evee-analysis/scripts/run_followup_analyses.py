@@ -7,7 +7,7 @@ Three analyses, run for both DEMETER2 and Chronos:
   3) Fraction of pairs above correlation thresholds
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_followup_analyses.py
+    uv run python evee-analysis/scripts/run_followup_analyses.py
 """
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
-DEMETER2_PATH = EEVE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
-CHRONOS_PATH = EEVE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+DEMETER2_PATH = EVEE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
+CHRONOS_PATH = EVEE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 RANDOM_SEED = 42
 K_VALUES = [5, 10, 20, 50]
@@ -251,13 +251,14 @@ def analysis_2_delta_vs_k(
             for _ in range(n_needed):
                 for _ in range(20):
                     rg = valid_genes[rng.integers(len(valid_genes))]
-                    if rg != q_gene:
-                        rv = gene_to_vec.get(rg)
-                        if rv is not None:
-                            c = pairwise_profile_corr(q_vec, rv)
-                            if c is not None:
-                                rand_corrs_for_variant.append(c)
-                        break
+                    if rg == q_gene:
+                        continue
+                    rv = gene_to_vec.get(rg)
+                    if rv is not None:
+                        c = pairwise_profile_corr(q_vec, rv)
+                        if c is not None:
+                            rand_corrs_for_variant.append(c)
+                            break
 
             nb_corrs.extend(cross_gene_corrs)
             rd_corrs.extend(rand_corrs_for_variant)

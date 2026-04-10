@@ -43,7 +43,7 @@ DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
 
 RANDOM_SEED = 42
 BOOTSTRAP_N = 2000
-DATE_TAG = time.strftime("%Y%m%d")
+DATE_TAG = "20260409"
 
 PALETTE = {
     "DEMETER2": "#2271B5",
@@ -503,20 +503,14 @@ def q4_permutation_null() -> dict:
     observed = _compute_enrichment(knn_indices, k)
     log.info(f"  Observed co-complex fraction: {observed:.6f}")
 
-    n_perms = 200
+    n_perms = 1000
     rng = np.random.default_rng(RANDOM_SEED)
     perm_fracs = np.empty(n_perms)
 
-    log.info(f"  Running {n_perms} permutations...")
+    log.info(f"  Running {n_perms} label-permutation tests...")
     for p in range(n_perms):
-        perm_knn = knn_indices.copy()
-        for i in range(perm_knn.shape[0]):
-            rng.shuffle(perm_knn[i])
-        shuffled_mapping = list(range(len(gene_list)))
-        rng.shuffle(shuffled_mapping)
         old_gene_list = gene_list.copy()
-        for idx, new_idx in enumerate(shuffled_mapping):
-            gene_list[idx] = old_gene_list[new_idx]
+        rng.shuffle(gene_list)
 
         perm_fracs[p] = _compute_enrichment(knn_indices, k)
 

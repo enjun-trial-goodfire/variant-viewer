@@ -176,8 +176,8 @@ For each CORUM complex, it compares the gene-averaged matrix entries of complex 
 
 ### Key result
 
-- **271 complexes** have at least one significantly enriched matrix entry (FDR < 0.05).
-- **722 matrix entries** are recurrently significant across 5 or more complexes, suggesting these entries encode broadly relevant protein interaction features.
+- **105 of 300 complexes** have at least one significantly enriched matrix entry (FDR < 0.05).
+- **122 matrix entries** are recurrently significant across 3 or more complexes, suggesting these entries encode broadly relevant protein interaction features.
 - Split-half stability test: randomly splitting each complex in half and comparing the enriched entries between halves shows good reproducibility.
 
 ### Controls and safeguards
@@ -305,7 +305,7 @@ HGNC gene families ───┘         │
           │                   Answer: YES (2-3x for structure, significant for function)
           │
      Matrix entries ── Which specific features drive this?
-          │                   Answer: 271 complexes have specific features; 225 features shared
+          │                   Answer: 105/300 complexes have specific features; 225 features shared
           │                           between structure and function
           │
      Left/Right views ── Do rows and columns capture different biology?

@@ -31,7 +31,7 @@ Deltas represent gene-level mean (neighbor correlation minus random correlation)
 
 ## Finding 3: Individual matrix features distinguish specific protein complexes
 
-Of 4,096 matrix entries, specific entries are significantly enriched (FDR < 0.05) in 271 CORUM complexes. 722 entries are recurrently significant across 5+ complexes. These associations are stable in split-half validation.
+Of 4,096 matrix entries, specific entries are significantly enriched (FDR < 0.05) in 105 of 300 tested CORUM complexes. 122 entries are recurrently significant across 3+ complexes. These associations are stable in split-half validation.
 
 ## Finding 4: Structural and functional signals share latent features
 

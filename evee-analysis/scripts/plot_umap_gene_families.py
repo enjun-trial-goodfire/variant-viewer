@@ -9,7 +9,7 @@ Pipeline:
   5. Save UMAP coordinates as intermediate, generate figure
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/plot_umap_gene_families.py
+    uv run python evee-analysis/scripts/plot_umap_gene_families.py
 """
 from __future__ import annotations
 
@@ -37,13 +37,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 KNN_CACHE = OUT_DIR / "corum_full_knn_indices.npz"
-HGNC_PATH = EEVE_ROOT / "data" / "hgnc_complete_set.txt"
+HGNC_PATH = EVEE_ROOT / "data" / "hgnc_complete_set.txt"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
 
 RANDOM_SEED = 42
 N_TOP_CLASSES = 14

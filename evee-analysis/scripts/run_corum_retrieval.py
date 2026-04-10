@@ -14,7 +14,7 @@ For k = 5, 10, 20, 50:
 Gene-level bootstrap (5000 iter) for 95% CIs on precision, recall, F1.
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_corum_retrieval.py
+    uv run python evee-analysis/scripts/run_corum_retrieval.py
 """
 from __future__ import annotations
 
@@ -42,10 +42,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
-CORUM_PATH = EEVE_ROOT / "data" / "corum_humanComplexes.json"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
+CORUM_PATH = EVEE_ROOT / "data" / "corum_humanComplexes.json"
 KNN_CACHE = OUT_DIR / "corum_full_knn_indices.npz"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
 

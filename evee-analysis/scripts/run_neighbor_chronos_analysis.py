@@ -7,14 +7,14 @@ Chronos cell lines not present in DEMETER2 are dropped.
 
 Data sources:
   - builds/variants.duckdb: 184,177 variants with precomputed neighbors (JSON column)
-  - eeve-analysis/data/CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv
+  - evee-analysis/data/CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv
     1,208 cell lines x 18,531 genes (HUGO symbols), Chronos effect scores
     First column (unnamed): ACH-IDs matching DEMETER2 depmap_id
-  - eeve-analysis/data/RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv
+  - evee-analysis/data/RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv
     Used ONLY for cell line metadata (lineage_1..6)
 
 Run from variant-viewer root:
-    uv run python eeve-analysis/scripts/run_neighbor_chronos_analysis.py
+    uv run python evee-analysis/scripts/run_neighbor_chronos_analysis.py
 """
 from __future__ import annotations
 
@@ -41,14 +41,14 @@ from reproducibility import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-CHRONOS_PATH = EEVE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
-DEMETER2_PATH = EEVE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
-EMB_INDEX_PATH = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool" / "index.sqlite"
+CHRONOS_PATH = EVEE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
+DEMETER2_PATH = EVEE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
+EMB_INDEX_PATH = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool" / "index.sqlite"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 TOP_K = 10
 MIN_OVERLAP = 50

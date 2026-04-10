@@ -4,10 +4,10 @@
 Uses the repo's own ``db.open_db`` to connect (same path as the app server).
 
 Usage (from repo root):
-    uv run python eeve-analysis/scripts/inspect_db.py
-    uv run python eeve-analysis/scripts/inspect_db.py --db builds/variants.duckdb
-    uv run python eeve-analysis/scripts/inspect_db.py --sample 5
-    uv run python eeve-analysis/scripts/inspect_db.py --output  # also saves to eeve-analysis/outputs/tables/
+    uv run python evee-analysis/scripts/inspect_db.py
+    uv run python evee-analysis/scripts/inspect_db.py --db builds/variants.duckdb
+    uv run python evee-analysis/scripts/inspect_db.py --sample 5
+    uv run python evee-analysis/scripts/inspect_db.py --output  # also saves to evee-analysis/outputs/tables/
 """
 
 from __future__ import annotations
@@ -20,15 +20,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
-_EEVE_ROOT = _SCRIPTS_DIR.parent                        # eeve-analysis/
-_REPO_ROOT = _EEVE_ROOT.parent                          # variant-viewer/
+_EVEE_ROOT = _SCRIPTS_DIR.parent                        # evee-analysis/
+_REPO_ROOT = _EVEE_ROOT.parent                          # variant-viewer/
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from db import open_db  # noqa: E402
 
 _DEFAULT_DB = _REPO_ROOT / "builds" / "variants.duckdb"
-_OUTPUT_DIR = _EEVE_ROOT / "outputs" / "tables"
+_OUTPUT_DIR = _EVEE_ROOT / "outputs" / "tables"
 
 # Column prefixes that define logical groups (from the app's column naming convention).
 # serve.py returns flat rows; api.ts uses these prefixes to reconstruct nested structures.
@@ -72,7 +72,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", type=Path, default=_DEFAULT_DB, help="Path to variants.duckdb")
     ap.add_argument("--sample", type=int, default=3, help="Number of sample rows to display")
-    ap.add_argument("--output", action="store_true", help="Also write report to eeve-analysis/outputs/tables/")
+    ap.add_argument("--output", action="store_true", help="Also write report to evee-analysis/outputs/tables/")
     args = ap.parse_args()
 
     db_path = args.db.resolve()
@@ -296,8 +296,8 @@ def main() -> None:
 
     if args.output:
         print(f"\nTip: to save the full report, re-run with tee:")
-        print(f"  uv run python eeve-analysis/scripts/inspect_db.py --sample {args.sample} "
-              f"| tee eeve-analysis/outputs/tables/db_inspection_report.txt")
+        print(f"  uv run python evee-analysis/scripts/inspect_db.py --sample {args.sample} "
+              f"| tee evee-analysis/outputs/tables/db_inspection_report.txt")
 
 
 if __name__ == "__main__":

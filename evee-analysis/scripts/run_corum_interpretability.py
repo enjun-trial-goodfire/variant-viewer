@@ -13,7 +13,7 @@ Stages:
   9-10. Report + interpretation
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_corum_interpretability.py
+    uv run python evee-analysis/scripts/run_corum_interpretability.py
 """
 from __future__ import annotations
 
@@ -58,12 +58,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
-CORUM_PATH = EEVE_ROOT / "data" / "corum_humanComplexes.json"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+CORUM_PATH = EVEE_ROOT / "data" / "corum_humanComplexes.json"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 RANDOM_SEED = 42
 MIN_VARIANTS_PER_GENE = 3

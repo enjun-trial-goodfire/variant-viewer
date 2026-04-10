@@ -2,9 +2,9 @@
 """Verify deterministic outputs by running an analysis script twice and comparing checksums.
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/verify_determinism.py demeter2
-    uv run python eeve-analysis/scripts/verify_determinism.py chronos
-    uv run python eeve-analysis/scripts/verify_determinism.py both
+    uv run python evee-analysis/scripts/verify_determinism.py demeter2
+    uv run python evee-analysis/scripts/verify_determinism.py chronos
+    uv run python evee-analysis/scripts/verify_determinism.py both
 """
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-SCRIPTS_DIR = EEVE_ROOT / "scripts"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+SCRIPTS_DIR = EVEE_ROOT / "scripts"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 SCRIPTS = {
     "demeter2": SCRIPTS_DIR / "run_neighbor_depmap_analysis.py",

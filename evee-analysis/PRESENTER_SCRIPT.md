@@ -72,7 +72,7 @@
 **File:** `q4_permutation_null.png`
 
 **Talking points (30 sec):**
-"To confirm the structural enrichment isn't an artifact of graph structure or gene frequency, we ran a permutation test. We shuffled gene labels across variants 200 times, preserving the kNN graph topology but destroying the gene-biology mapping. The observed co-complex fraction is 0.85%, while the permutation null averages 0.26% — a z-score of 38. None of the 200 permutations came anywhere close to the observed value. This confirms the enrichment is driven by real biological signal in the embeddings, not by structural properties of the kNN graph."
+"To confirm the structural enrichment isn't an artifact of graph structure or gene frequency, we ran a permutation test. We shuffled gene labels across variants 1,000 times, preserving the kNN graph topology but destroying the gene-biology mapping. The observed co-complex fraction is 0.85%, while the permutation null averages 0.26% — a z-score of 40. None of the 1,000 permutations came anywhere close to the observed value. This confirms the enrichment is driven by real biological signal in the embeddings, not by structural properties of the kNN graph."
 
 ---
 
@@ -84,7 +84,7 @@
 "Now we shift from 'does it work' to 'can we understand what it learned.' The Evo2 embedding is a 64×64 covariance matrix — that's 4,096 individual features. We ask: for each protein complex, which specific matrix entries distinguish its member genes from non-members?"
 
 **Panel (a) — Recurrence heatmap (20 sec):**
-"The left panel shows recurrence: how many of the 271 tested complexes have a significant signal at each matrix entry. Most entries are significant for zero or one complex — the matrix is mostly 'quiet.' But a handful of entries light up for 10–17 complexes, meaning they carry broad structural information."
+"The left panel shows recurrence: how many of the 300 tested complexes have a significant signal at each matrix entry. Most entries are significant for zero or one complex — the matrix is mostly 'quiet.' But a handful of entries light up for 10–17 complexes, meaning they carry broad structural information."
 
 **Panel (b) — BAF complex example (20 sec):**
 "The right panel zooms in on one complex — BAF, a chromatin remodeling complex. Red entries have higher values inside the complex; blue entries have lower values. The sparse pattern of significant entries shows that the embedding encodes this complex through a specific, interpretable subset of features, not through a diffuse global signal."
@@ -151,7 +151,7 @@
 
 "To summarize:
 
-1. **The embedding captures known biology.** Nearest neighbors are 2–3× enriched for CORUM, STRING, and gene family relationships, confirmed by a permutation test with z = 38.
+1. **The embedding captures known biology.** Nearest neighbors are 2–3× enriched for CORUM, STRING, and gene family relationships, confirmed by a permutation test with z = 40.
 
 2. **It also captures functional biology.** Neighbors share cancer dependency profiles with a small but highly significant and reproducible effect, stronger in CRISPR (Chronos) than RNAi (DEMETER2), and stronger for pathogenic than benign variants.
 

@@ -11,12 +11,12 @@ Data sources:
     join key: variant_id (chr:pos:ref:alt)
     gene key: gene_name (HUGO symbol)
     consequence: consequence_display (Missense, Nonsense, Frameshift, etc.)
-  - eeve-analysis/data/RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv
+  - evee-analysis/data/RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv
     707 cell lines x 16,838 genes (HUGO symbols), DEMETER2 effect scores
     cell line metadata: depmap_id, cell_line_display_name, lineage_1..6
 
 Run from variant-viewer root:
-    uv run python eeve-analysis/scripts/run_neighbor_depmap_analysis.py
+    uv run python evee-analysis/scripts/run_neighbor_depmap_analysis.py
 """
 from __future__ import annotations
 
@@ -44,13 +44,13 @@ from reproducibility import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-DEMETER2_PATH = EEVE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
-EMB_INDEX_PATH = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool" / "index.sqlite"
+DEMETER2_PATH = EVEE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
+EMB_INDEX_PATH = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool" / "index.sqlite"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 TOP_K = 10
 MIN_OVERLAP = 50

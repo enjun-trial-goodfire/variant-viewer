@@ -6,17 +6,17 @@ size ≥ 3 genes.  Gene symbols upper-cased for matching.  Self-pairs excluded.
 Bootstrap CIs computed by resampling source *genes*.  kNN recomputed from
 embeddings at k = 5, 10, 20, 50.
 
-Outputs (in eeve-analysis/data/intermediate/):
+Outputs (in evee-analysis/data/intermediate/):
   corum_full_enrichment_vs_k.parquet   — per-k enrichment table
   corum_full_run_config.json           — all parameters for reproducibility
   corum_full_knn_indices.npz           — reusable kNN index + variant order
 
-Figures (in eeve-analysis/outputs/figures/):
+Figures (in evee-analysis/outputs/figures/):
   fig_corum_full_enrichment_vs_k.png
   fig_corum_full_sharing_rate_vs_k.png
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_corum_full.py
+    uv run python evee-analysis/scripts/run_corum_full.py
 """
 from __future__ import annotations
 
@@ -49,13 +49,13 @@ log = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
-CORUM_PATH = EEVE_ROOT / "data" / "corum_humanComplexes.json"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+CORUM_PATH = EVEE_ROOT / "data" / "corum_humanComplexes.json"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 # ── Parameters ────────────────────────────────────────────────────────
 

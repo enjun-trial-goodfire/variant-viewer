@@ -13,7 +13,7 @@ Stages:
   5. Outputs — top-50 tables, heatmaps, report
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_chronos_entry_analysis.py
+    uv run python evee-analysis/scripts/run_chronos_entry_analysis.py
 """
 from __future__ import annotations
 
@@ -44,11 +44,11 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-CHRONOS_PATH = EEVE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
-DEMETER2_PATH = EEVE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+CHRONOS_PATH = EVEE_ROOT / "data" / "CRISPR_DepMap_Public_26Q1Score_Chronos_subsetted.csv"
+DEMETER2_PATH = EVEE_ROOT / "data" / "RNAi_AchillesDRIVEMarcotte,_DEMETER2_subsetted-2.csv"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 
 RANDOM_SEED = 42
 DEP_THRESHOLD = -0.5  # Chronos score below this = "dependent"

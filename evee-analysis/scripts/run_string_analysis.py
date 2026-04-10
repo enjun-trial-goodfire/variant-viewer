@@ -15,7 +15,7 @@ Gene mapping: STRING protein.info preferred_name (exact match, already
 uppercase).  DuckDB gene_name uppercased for matching.  Self-pairs excluded.
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_string_analysis.py
+    uv run python evee-analysis/scripts/run_string_analysis.py
 """
 from __future__ import annotations
 
@@ -46,15 +46,15 @@ log = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
-EMB_DIR = EEVE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
+EMB_DIR = EVEE_ROOT / "data" / "clinvar-deconfounded-covariance64_pool"
 
-STRING_INFO = EEVE_ROOT / "data" / "9606.protein.info.v12.0.txt"
-STRING_LINKS = EEVE_ROOT / "data" / "9606.protein.links.full.v12.0.txt"
+STRING_INFO = EVEE_ROOT / "data" / "9606.protein.info.v12.0.txt"
+STRING_LINKS = EVEE_ROOT / "data" / "9606.protein.links.full.v12.0.txt"
 
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
 KNN_CACHE = OUT_DIR / "corum_full_knn_indices.npz"
 
 # ── Parameters ────────────────────────────────────────────────────────

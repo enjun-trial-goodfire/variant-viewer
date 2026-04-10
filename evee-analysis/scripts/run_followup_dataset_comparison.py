@@ -67,7 +67,7 @@ STRING_INFO = EVEE_ROOT / "data" / "9606.protein.info.v12.0.txt"
 STRING_LINKS = EVEE_ROOT / "data" / "9606.protein.links.full.v12.0.txt"
 
 RANDOM_SEED = 42
-DATE_TAG = time.strftime("%Y%m%d")
+DATE_TAG = "20260409"
 STRING_SCORE_THRESHOLD = 700
 STRING_MIN_PARTNERS = 5
 STRING_MAX_GROUPS = 500
@@ -697,7 +697,11 @@ def write_report(
         qual = "similar" if r["spearman_rho"] > 0.5 else "partially overlapping" if r["spearman_rho"] > 0.2 else "largely distinct"
         lines.append(f"1. **Within-structural ({r['dataset_a']} vs {r['dataset_b']}):** "
                      f"ρ = {r['spearman_rho']:.4f}. "
-                     f"CORUM and STRING capture {qual} latent feature patterns.")
+                     f"CORUM and STRING capture {qual} latent feature patterns. "
+                     f"**Caveat:** STRING groups are ego-networks (a gene plus its high-confidence "
+                     f"interaction partners), structurally different from CORUM's curated multi-gene "
+                     f"complexes. This comparison measures whether the same matrix entries are enriched "
+                     f"in both contexts, not whether the group definitions are equivalent.")
 
     if within_func.height > 0:
         r = within_func.row(0, named=True)

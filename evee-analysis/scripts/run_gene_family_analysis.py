@@ -20,7 +20,7 @@ Outputs:
   fig_gene_family_top_classes.png
 
 Usage (from variant-viewer root):
-    uv run python eeve-analysis/scripts/run_gene_family_analysis.py
+    uv run python evee-analysis/scripts/run_gene_family_analysis.py
 """
 from __future__ import annotations
 
@@ -48,10 +48,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EEVE_ROOT = REPO_ROOT / "eeve-analysis"
-OUT_DIR = EEVE_ROOT / "data" / "intermediate"
-FIG_DIR = EEVE_ROOT / "outputs" / "figures"
-HGNC_PATH = EEVE_ROOT / "data" / "hgnc_complete_set.txt"
+EVEE_ROOT = REPO_ROOT / "evee-analysis"
+OUT_DIR = EVEE_ROOT / "data" / "intermediate"
+FIG_DIR = EVEE_ROOT / "outputs" / "figures"
+HGNC_PATH = EVEE_ROOT / "data" / "hgnc_complete_set.txt"
 KNN_CACHE = OUT_DIR / "corum_full_knn_indices.npz"
 DB_PATH = REPO_ROOT / "builds" / "variants.duckdb"
 
